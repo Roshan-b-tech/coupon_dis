@@ -249,7 +249,8 @@ async function seedCoupons() {
                 duration: 'repeating',
                 duration_in_months: 3,
                 percent_off: 25.5,
-                id: `SAVE25_${Date.now()}` // Generate unique ID
+                id: `SAVE25_${Date.now()}`, // Generate unique ID
+                max_redemptions: 100 // Limit total uses
             });
 
             // Store the reference in our database
@@ -257,7 +258,13 @@ async function seedCoupons() {
                 code: stripeCoupon.id,
                 description: 'Save 25.5% on your purchase',
                 discount: 25.5,
-                stripeId: stripeCoupon.id
+                stripeId: stripeCoupon.id,
+                expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 3 months
+                duration: stripeCoupon.duration,
+                duration_in_months: stripeCoupon.duration_in_months,
+                maxRedemptions: stripeCoupon.max_redemptions,
+                timesRedeemed: 0,
+                active: true
             });
             await coupon.save();
             console.log('Initial Stripe coupon created successfully');
@@ -317,7 +324,7 @@ app.post('/api/coupons/next', async (req, res) => {
         }
 
         // Get available coupon
-        const coupon = await Coupon.findOne();
+        const coupon = await Coupon.findAvailable().findOne();
         console.log('Found existing coupon:', coupon ? 'yes' : 'no');
 
         if (!coupon) {
@@ -328,7 +335,8 @@ app.post('/api/coupons/next', async (req, res) => {
                     duration: 'repeating',
                     duration_in_months: 3,
                     percent_off: 25.5,
-                    id: `SAVE25_${Date.now()}`
+                    id: `SAVE25_${Date.now()}`,
+                    max_redemptions: 100
                 });
                 console.log('Stripe coupon created successfully:', stripeCoupon.id);
 
@@ -336,7 +344,13 @@ app.post('/api/coupons/next', async (req, res) => {
                     code: stripeCoupon.id,
                     description: 'Save 25.5% on your purchase',
                     discount: 25.5,
-                    stripeId: stripeCoupon.id
+                    stripeId: stripeCoupon.id,
+                    expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+                    duration: stripeCoupon.duration,
+                    duration_in_months: stripeCoupon.duration_in_months,
+                    maxRedemptions: stripeCoupon.max_redemptions,
+                    timesRedeemed: 0,
+                    active: true
                 });
                 await newCoupon.save();
                 console.log('New coupon saved to database:', newCoupon._id);
@@ -350,11 +364,19 @@ app.post('/api/coupons/next', async (req, res) => {
                 });
                 console.log('Claim record created:', claim._id);
 
+                // Increment redemption count
+                await newCoupon.incrementRedemptions();
+
                 return res.json({
                     code: newCoupon.code,
                     description: newCoupon.description,
                     discount: newCoupon.discount,
-                    expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) // 3 months
+                    expiresAt: newCoupon.expiresAt,
+                    duration: newCoupon.duration,
+                    duration_in_months: newCoupon.duration_in_months,
+                    maxRedemptions: newCoupon.maxRedemptions,
+                    timesRedeemed: newCoupon.timesRedeemed,
+                    active: newCoupon.active
                 });
             } catch (stripeError) {
                 console.error('Stripe coupon creation error:', stripeError);
@@ -366,6 +388,14 @@ app.post('/api/coupons/next', async (req, res) => {
         }
 
         try {
+            // Check if coupon is still valid
+            if (!coupon.isValid()) {
+                return res.status(400).json({
+                    error: 'This coupon is no longer valid.',
+                    retryAfter: 1
+                });
+            }
+
             console.log('Creating claim for existing coupon:', coupon._id);
             // Create claim record for existing coupon
             const claim = await CouponClaim.create({
@@ -376,11 +406,19 @@ app.post('/api/coupons/next', async (req, res) => {
             });
             console.log('Claim record created:', claim._id);
 
+            // Increment redemption count
+            await coupon.incrementRedemptions();
+
             return res.json({
                 code: coupon.code,
                 description: coupon.description,
                 discount: coupon.discount,
-                expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) // 3 months
+                expiresAt: coupon.expiresAt,
+                duration: coupon.duration,
+                duration_in_months: coupon.duration_in_months,
+                maxRedemptions: coupon.maxRedemptions,
+                timesRedeemed: coupon.timesRedeemed,
+                active: coupon.active
             });
         } catch (claimError) {
             console.error('Error creating claim:', claimError);

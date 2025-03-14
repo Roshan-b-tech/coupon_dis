@@ -12,6 +12,12 @@ interface Coupon {
   code: string;
   description: string;
   discount: number;
+  expiresAt: string;
+  duration: 'once' | 'repeating' | 'forever';
+  duration_in_months?: number;
+  maxRedemptions?: number;
+  timesRedeemed: number;
+  active: boolean;
 }
 
 function App() {
@@ -81,6 +87,24 @@ function App() {
     }
   };
 
+  const formatExpiryDate = (date: string) => {
+    const expiryDate = new Date(date);
+    return expiryDate.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
+  const formatDuration = (coupon: Coupon) => {
+    if (coupon.duration === 'once') return 'One-time use';
+    if (coupon.duration === 'forever') return 'Never expires';
+    if (coupon.duration === 'repeating' && coupon.duration_in_months) {
+      return `Valid for ${coupon.duration_in_months} months`;
+    }
+    return '';
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 flex items-center justify-center p-4 sm:p-6 md:p-8">
       <Toaster position="top-center" />
@@ -112,6 +136,15 @@ function App() {
             <p className="text-base sm:text-lg font-semibold text-indigo-900">
               {coupon.discount}% OFF
             </p>
+            <div className="mt-4 text-sm text-gray-600">
+              <p>Expires: {formatExpiryDate(coupon.expiresAt)}</p>
+              <p>{formatDuration(coupon)}</p>
+              {coupon.maxRedemptions && (
+                <p>
+                  Uses: {coupon.timesRedeemed} / {coupon.maxRedemptions}
+                </p>
+              )}
+            </div>
           </div>
         ) : error ? (
           <div className="flex items-center gap-2 bg-red-50 text-red-700 p-3 sm:p-4 rounded-lg mb-4 sm:mb-6 text-sm sm:text-base">
