@@ -5,6 +5,7 @@ const couponSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true,
+    index: true
   },
   description: {
     type: String,
@@ -13,11 +14,16 @@ const couponSchema = new mongoose.Schema({
   discount: {
     type: Number,
     required: true,
-  },
-  lastAssignedAt: {
-    type: Date,
-    default: null
+    min: 0,
+    max: 100
   }
+}, {
+  timestamps: true
 });
+
+// Add static method to find available coupons
+couponSchema.statics.findAvailable = function () {
+  return this.find();
+};
 
 export default mongoose.model('Coupon', couponSchema);

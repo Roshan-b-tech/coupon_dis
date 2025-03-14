@@ -37,7 +37,7 @@ async function copyServerFiles() {
         await ensureDirectoryExists(distDir);
         await ensureDirectoryExists(serverModelsDir);
 
-        // Define files to copy
+        // Define files to copy (only index.js and Coupon.js)
         const filesToCopy = [
             { src: 'index.js', dest: 'dist/index.js' },
             { src: 'server/models/Coupon.js', dest: 'dist/server/models/Coupon.js' }

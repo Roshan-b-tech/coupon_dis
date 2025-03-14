@@ -10,6 +10,7 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import mongoose from 'mongoose';
 import Coupon from './server/models/Coupon.js';
+import CouponClaim from './server/models/CouponClaim.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -112,35 +113,117 @@ app.get('/api/coupons/status', async (req, res) => {
 app.post('/api/coupons/next', async (req, res) => {
     try {
         const sessionId = req.cookies.sessionId;
+        const ipAddress = req.ip || req.connection.remoteAddress;
+
         if (!sessionId) {
             return res.status(400).json({ error: 'No session ID found' });
         }
 
         console.log('Session ID:', sessionId);
+        console.log('IP Address:', ipAddress);
 
-        // Check if user has claimed a coupon in the last hour
+        // Check if user has claimed a coupon in the last hour (by session or IP)
         const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-        const recentClaim = await Coupon.findOne({
-            claimedBy: sessionId,
+
+        // First, check for any claims by this session or IP in the last hour
+        const recentClaims = await CouponClaim.find({
+            $or: [
+                { sessionId: sessionId },
+                { ipAddress: ipAddress }
+            ],
             claimedAt: { $gt: oneHourAgo }
+        }).sort({ claimedAt: -1 });
+
+        console.log('Recent claims found:', recentClaims.length);
+
+        if (recentClaims.length > 0) {
+            const mostRecentClaim = recentClaims[0];
+            const timeLeft = Math.ceil((mostRecentClaim.claimedAt.getTime() + 3600000 - Date.now()) / 60000);
+            return res.status(400).json({
+                error: `You can only claim one coupon per hour. Please wait ${timeLeft} minutes before claiming another coupon.`
+            });
+        }
+
+        // Get all coupons this user has ever claimed
+        const userClaimedCoupons = await CouponClaim.find({
+            $or: [
+                { sessionId: sessionId },
+                { ipAddress: ipAddress }
+            ]
+        }).select('couponId');
+
+        const claimedCouponIds = userClaimedCoupons.map(c => c.couponId);
+
+        // Find available coupons that this user hasn't claimed before
+        const availableCoupons = await Coupon.find({
+            _id: { $nin: claimedCouponIds }
         });
 
-        if (recentClaim) {
-            return res.status(400).json({ error: 'You can only claim one coupon per hour' });
+        if (availableCoupons.length === 0) {
+            // If no unclaimed coupons available, reset all claims older than 24 hours
+            const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            await CouponClaim.deleteMany({
+                claimedAt: { $lt: oneDayAgo }
+            });
+
+            // Try to find a coupon again after resetting
+            const newAvailableCoupons = await Coupon.find();
+
+            if (newAvailableCoupons.length === 0) {
+                return res.status(404).json({ error: 'No coupons available' });
+            }
+
+            // Randomly select a coupon from available ones
+            const randomIndex = Math.floor(Math.random() * newAvailableCoupons.length);
+            const newCoupon = newAvailableCoupons[randomIndex];
+
+            // Create a new claim record
+            await CouponClaim.create({
+                sessionId,
+                ipAddress,
+                couponId: newCoupon._id,
+                claimedAt: new Date()
+            });
+
+            console.log('Coupon claimed successfully (after reset):', {
+                code: newCoupon.code,
+                claimedBy: sessionId,
+                claimedByIP: ipAddress,
+                claimedAt: new Date()
+            });
+
+            return res.json({
+                code: newCoupon.code,
+                description: newCoupon.description,
+                discount: newCoupon.discount
+            });
         }
 
-        // Find an unclaimed coupon
-        const coupon = await Coupon.findOne({ claimedBy: null });
-        if (!coupon) {
-            return res.status(404).json({ error: 'No coupons available' });
-        }
+        // Randomly select a coupon from available ones
+        const randomIndex = Math.floor(Math.random() * availableCoupons.length);
+        const coupon = availableCoupons[randomIndex];
 
-        // Update the coupon with the user's session ID
-        coupon.claimedBy = sessionId;
-        coupon.claimedAt = new Date();
-        await coupon.save();
+        // Create a new claim record
+        await CouponClaim.create({
+            sessionId,
+            ipAddress,
+            couponId: coupon._id,
+            claimedAt: new Date()
+        });
 
-        res.json({ code: coupon.code });
+        console.log('Coupon claimed successfully:', {
+            code: coupon.code,
+            claimedBy: sessionId,
+            claimedByIP: ipAddress,
+            claimedAt: new Date()
+        });
+
+        // Return full coupon details
+        res.json({
+            code: coupon.code,
+            description: coupon.description,
+            discount: coupon.discount
+        });
     } catch (error) {
         console.error('Error claiming coupon:', error);
         res.status(500).json({ error: 'Failed to claim coupon' });

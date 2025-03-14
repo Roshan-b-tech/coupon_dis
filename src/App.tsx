@@ -16,20 +16,35 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [coupon, setCoupon] = useState<Coupon | null>(null);
+  const [lastClaimTime, setLastClaimTime] = useState<number | null>(null);
 
   useEffect(() => {
     // Set session ID cookie if not exists
     if (!document.cookie.includes('sessionId')) {
       const sessionId = Math.random().toString(36).substring(2);
-      // Set the cookie without domain restriction
       document.cookie = `sessionId=${sessionId}; max-age=86400; path=/; SameSite=None; Secure`;
       console.log('Set sessionId cookie:', sessionId);
     } else {
       console.log('Existing sessionId cookie found');
     }
+
+    // Check if there's a last claim time in localStorage
+    const storedLastClaimTime = localStorage.getItem('lastClaimTime');
+    if (storedLastClaimTime) {
+      setLastClaimTime(parseInt(storedLastClaimTime));
+    }
   }, []);
 
   const claimCoupon = async () => {
+    // Check if user has claimed in the last hour
+    if (lastClaimTime && Date.now() - lastClaimTime < 3600000) {
+      const timeLeft = Math.ceil((3600000 - (Date.now() - lastClaimTime)) / 60000);
+      const errorMessage = `You can only claim one coupon per hour. Please wait ${timeLeft} minutes before claiming another coupon.`;
+      setError(errorMessage);
+      toast.error(errorMessage);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
@@ -51,10 +66,14 @@ function App() {
       }
 
       const data = await response.json();
-      setCoupon(data.code);
+      setCoupon(data);
+      setLastClaimTime(Date.now());
+      localStorage.setItem('lastClaimTime', Date.now().toString());
+      toast.success('Coupon claimed successfully!');
     } catch (err) {
       console.error('Error claiming coupon:', err);
       setError(err instanceof Error ? err.message : 'Failed to claim coupon');
+      toast.error(err instanceof Error ? err.message : 'Failed to claim coupon');
     } finally {
       setLoading(false);
     }
