@@ -21,42 +21,40 @@ function App() {
     // Set session ID cookie if not exists
     if (!document.cookie.includes('sessionId')) {
       const sessionId = Math.random().toString(36).substring(2);
-      document.cookie = `sessionId=${sessionId}; max-age=86400; path=/; SameSite=None; Secure; domain=netlify.app`;
+      // Set the cookie without domain restriction
+      document.cookie = `sessionId=${sessionId}; max-age=86400; path=/; SameSite=None; Secure`;
+      console.log('Set sessionId cookie:', sessionId);
+    } else {
+      console.log('Existing sessionId cookie found');
     }
   }, []);
 
   const claimCoupon = async () => {
+    setLoading(true);
+    setError(null);
     try {
-      setLoading(true);
-      setError(null);
-
-      console.log('Attempting to fetch from:', `${API_URL}/api/coupons/next`);
+      console.log('Current cookies:', document.cookie);
+      console.log('Fetching from:', API_URL);
 
       const response = await fetch(`${API_URL}/api/coupons/next`, {
-        method: 'GET',
+        method: 'POST',
         credentials: 'include',
         headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
-        },
-        mode: 'cors'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        }
       });
 
-      console.log('Response status:', response.status);
-
-      const data = await response.json();
-      console.log('Response data:', data);
-
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to claim coupon');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to claim coupon');
       }
 
-      setCoupon(data);
-      toast.success('Coupon claimed successfully!');
+      const data = await response.json();
+      setCoupon(data.code);
     } catch (err) {
-      console.error('Error details:', err);
-      setError(err instanceof Error ? err.message : 'An error occurred');
-      toast.error(err instanceof Error ? err.message : 'An error occurred');
+      console.error('Error claiming coupon:', err);
+      setError(err instanceof Error ? err.message : 'Failed to claim coupon');
     } finally {
       setLoading(false);
     }

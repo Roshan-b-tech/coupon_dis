@@ -23,31 +23,25 @@ const connectToMongoDB = async () => {
 
   try {
     console.log('Attempting to connect to MongoDB...');
-    console.log('Environment file path:', join(__dirname, '../.env'));
-    console.log('MongoDB URI:', process.env.MONGODB_URI ? 'URI is defined' : 'URI is undefined');
+    console.log('Current environment:', process.env.NODE_ENV);
+    console.log('Server port:', process.env.PORT);
+    console.log('MongoDB URI status:', process.env.MONGODB_URI ? 'Defined' : 'Undefined');
+
     if (!process.env.MONGODB_URI) {
       console.log('Available environment variables:', Object.keys(process.env));
       throw new Error('MONGODB_URI is not defined in environment variables');
     }
 
-    await mongoose.connect(process.env.MONGODB_URI, {
-      serverSelectionTimeoutMS: 60000,
-      socketTimeoutMS: 60000,
-      connectTimeoutMS: 60000,
-      maxPoolSize: 50,
-      minPoolSize: 10,
-      maxIdleTimeMS: 60000
-    });
-
+    await mongoose.connect(process.env.MONGODB_URI);
     isConnected = true;
     console.log('Successfully connected to MongoDB');
 
-    // Seed coupons after successful connection
-    await seedCoupons();
+    // Log the number of available coupons
+    const couponCount = await Coupon.countDocuments();
+    console.log(`Number of coupons in database: ${couponCount}`);
   } catch (error) {
     console.error('MongoDB connection error:', error);
     isConnected = false;
-    // Retry connection after 5 seconds
     setTimeout(connectToMongoDB, 5000);
   }
 };
@@ -94,10 +88,26 @@ app.use(cors({
   origin: ['https://freecoupon60min.netlify.app', 'http://localhost:5173'],
   credentials: true,
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Accept']
+  allowedHeaders: ['Content-Type', 'Accept', 'Cookie']
 }));
 app.use(cookieParser());
 app.use(express.json());
+
+// Add cookie check middleware
+app.use((req, res, next) => {
+  if (!req.cookies.sessionId && req.path !== '/api/coupons/status') {
+    const sessionId = Math.random().toString(36).substring(2);
+    res.cookie('sessionId', sessionId, {
+      maxAge: 86400000, // 24 hours
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      path: '/'
+    });
+    req.cookies.sessionId = sessionId;
+  }
+  next();
+});
 
 // Connection check middleware
 app.use(async (req, res, next) => {
@@ -125,86 +135,41 @@ app.get('/api/coupons/status', async (req, res) => {
   }
 });
 
-app.get('/api/coupons/next', async (req, res) => {
-  if (!isConnected) {
-    return res.status(503).json({ error: 'Database connection not available' });
-  }
-
+app.post('/api/coupons/next', async (req, res) => {
   try {
-    const ipAddress = req.ip;
     const sessionId = req.cookies.sessionId;
-
     if (!sessionId) {
-      return res.status(400).json({ error: 'Session ID is required' });
+      return res.status(400).json({ error: 'No session ID found' });
     }
+
+    console.log('Session ID:', sessionId);
 
     // Check if user has claimed a coupon in the last hour
-    const lastClaim = await CouponClaim.findOne({
-      $or: [
-        { ipAddress, claimedAt: { $gte: new Date(Date.now() - 3600000) } },
-        { sessionId, claimedAt: { $gte: new Date(Date.now() - 3600000) } }
-      ]
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const recentClaim = await Coupon.findOne({
+      claimedBy: sessionId,
+      claimedAt: { $gt: oneHourAgo }
     });
 
-    if (lastClaim) {
-      const timeLeft = Math.ceil((lastClaim.claimedAt.getTime() + 3600000 - Date.now()) / 60000);
-      return res.status(429).json({
-        error: 'Rate limit exceeded',
-        message: `Please wait ${timeLeft} minutes before claiming another coupon.`
-      });
+    if (recentClaim) {
+      return res.status(400).json({ error: 'You can only claim one coupon per hour' });
     }
 
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
-      // Find coupons that haven't been claimed by this user
-      const existingClaims = await CouponClaim.find({
-        $or: [{ ipAddress }, { sessionId }]
-      }).distinct('couponId');
-
-      // Get a coupon that hasn't been claimed by this user
-      const coupon = await Coupon.findOne({
-        _id: { $nin: existingClaims }
-      }).sort({ lastAssignedAt: 1 });
-
-      if (!coupon) {
-        await session.abortTransaction();
-        return res.status(404).json({
-          error: 'No available coupons',
-          message: 'You have already claimed all available coupons. Please try again later.'
-        });
-      }
-
-      // Update coupon's last assigned time
-      coupon.lastAssignedAt = new Date();
-      await coupon.save({ session });
-
-      // Record the claim
-      await CouponClaim.create([{
-        ipAddress,
-        sessionId,
-        couponId: coupon._id,
-        claimedAt: new Date()
-      }], { session });
-
-      await session.commitTransaction();
-
-      // Send response
-      res.json({
-        code: coupon.code,
-        description: coupon.description,
-        discount: coupon.discount
-      });
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
-    } finally {
-      session.endSession();
+    // Find an unclaimed coupon
+    const coupon = await Coupon.findOne({ claimedBy: null });
+    if (!coupon) {
+      return res.status(404).json({ error: 'No coupons available' });
     }
+
+    // Update the coupon with the user's session ID
+    coupon.claimedBy = sessionId;
+    coupon.claimedAt = new Date();
+    await coupon.save();
+
+    res.json({ code: coupon.code });
   } catch (error) {
     console.error('Error claiming coupon:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to claim coupon' });
   }
 });
 
@@ -215,11 +180,32 @@ app.get('*', (req, res) => {
 
 // Start server and connect to MongoDB
 const startServer = async () => {
-  await connectToMongoDB();
+  try {
+    await connectToMongoDB();
 
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+    const server = app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+      console.log(`Server environment: ${process.env.NODE_ENV}`);
+      console.log('CORS origins:', ['https://freecoupon60min.netlify.app', 'http://localhost:5173']);
+    });
+
+    server.on('error', (error) => {
+      console.error('Server error:', error);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
 };
+
+// Add error handlers
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled rejection:', error);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+  process.exit(1);
+});
 
 startServer().catch(console.error);
