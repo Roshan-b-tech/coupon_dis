@@ -220,37 +220,58 @@ app.post('/api/coupons/next', async (req, res) => {
     console.log('Session ID:', sessionId);
 
     // Check if user has claimed a coupon in the last hour
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    console.log('Current time:', new Date().toISOString());
-    console.log('One hour ago:', oneHourAgo.toISOString());
-    console.log('Checking for claims with sessionId:', sessionId);
+    const oneHourAgo = new Date();
+    oneHourAgo.setHours(oneHourAgo.getHours() - 1); // More reliable way to subtract an hour
+
+    console.log('Claim check times:', {
+      currentTime: new Date().toISOString(),
+      oneHourAgo: oneHourAgo.toISOString(),
+      sessionId
+    });
 
     // First check for any existing claims with explicit date comparison
     const recentClaims = await CouponClaim.find({
       sessionId: sessionId,
       claimedAt: { $gt: oneHourAgo }
-    }).sort({ claimedAt: -1 });
+    }).lean(); // Use lean() for better performance
 
-    console.log('Recent claims found:', {
-      count: recentClaims.length,
-      claims: recentClaims.map(claim => ({
-        id: claim._id,
-        claimTime: claim.claimedAt,
-        timeSince: Math.floor((Date.now() - new Date(claim.claimedAt).getTime()) / (60 * 1000)) + ' minutes ago'
+    // Log all found claims for debugging
+    console.log('All claims for session:', {
+      sessionId,
+      claimsFound: recentClaims.map(c => ({
+        id: c._id,
+        claimTime: c.claimedAt,
+        elapsedMinutes: Math.floor((Date.now() - new Date(c.claimedAt).getTime()) / (60 * 1000))
       }))
     });
 
-    if (recentClaims.length > 0) {
-      const mostRecentClaim = recentClaims[0];
-      const timeSinceLastClaim = Date.now() - new Date(mostRecentClaim.claimedAt).getTime();
-      const minutesLeft = Math.ceil((60 * 60 * 1000 - timeSinceLastClaim) / (60 * 1000));
+    // Double check the timing manually to avoid any timezone issues
+    const validClaims = recentClaims.filter(claim => {
+      const claimTime = new Date(claim.claimedAt);
+      const elapsedMs = Date.now() - claimTime.getTime();
+      const elapsedMinutes = Math.floor(elapsedMs / (60 * 1000));
 
-      console.log('Blocking claim due to recent activity:', {
-        mostRecentClaimId: mostRecentClaim._id,
+      console.log('Claim validation:', {
+        claimId: claim._id,
+        claimTime: claimTime.toISOString(),
+        elapsedMinutes,
+        isWithinLastHour: elapsedMinutes < 60
+      });
+
+      return elapsedMinutes < 60;
+    });
+
+    if (validClaims.length > 0) {
+      const mostRecentClaim = validClaims[0];
+      const elapsedMs = Date.now() - new Date(mostRecentClaim.claimedAt).getTime();
+      const minutesLeft = Math.max(0, 60 - Math.floor(elapsedMs / (60 * 1000)));
+
+      console.log('Claim blocked:', {
+        reason: 'Recent claim exists',
         claimTime: mostRecentClaim.claimedAt,
-        minutesSinceClaim: Math.floor(timeSinceLastClaim / (60 * 1000)),
-        minutesLeft: minutesLeft,
-        currentTime: new Date().toISOString()
+        elapsedMinutes: Math.floor(elapsedMs / (60 * 1000)),
+        minutesLeft,
+        sessionId
       });
 
       return res.status(400).json({
@@ -261,12 +282,16 @@ app.post('/api/coupons/next', async (req, res) => {
         debug: {
           currentTime: new Date().toISOString(),
           lastClaimTime: mostRecentClaim.claimedAt,
-          minutesSinceClaim: Math.floor(timeSinceLastClaim / (60 * 1000))
+          elapsedMinutes: Math.floor(elapsedMs / (60 * 1000))
         }
       });
     }
 
-    console.log('No recent claims found, proceeding with coupon search');
+    console.log('Claim check passed:', {
+      sessionId,
+      validClaimsFound: validClaims.length,
+      proceeding: 'Searching for available coupon'
+    });
 
     // Find an unclaimed coupon
     const coupon = await Coupon.findOne({
