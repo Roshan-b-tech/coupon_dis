@@ -30,7 +30,9 @@ function App() {
   const [lastClaimTime, setLastClaimTime] = useState<number | null>(null);
   const [retries, setRetries] = useState(0);
   const [retryTimeout, setRetryTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const MAX_RETRIES = 3;
+  const COOLDOWN_PERIOD = 3600000; // 1 hour in milliseconds
 
   useEffect(() => {
     // Set session ID cookie if not exists
@@ -52,6 +54,25 @@ function App() {
     }
   }, []);
 
+  // Add countdown timer effect
+  useEffect(() => {
+    if (lastClaimTime) {
+      const updateTimeLeft = () => {
+        const now = Date.now();
+        const timeSinceLastClaim = now - lastClaimTime;
+        if (timeSinceLastClaim < COOLDOWN_PERIOD) {
+          setTimeLeft(Math.ceil((COOLDOWN_PERIOD - timeSinceLastClaim) / 1000));
+        } else {
+          setTimeLeft(null);
+        }
+      };
+
+      updateTimeLeft();
+      const timer = setInterval(updateTimeLeft, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [lastClaimTime]);
+
   // Function to clear any existing retry timeout
   const clearRetryTimeout = () => {
     if (retryTimeout) {
@@ -72,15 +93,6 @@ function App() {
     // If not a retry, reset the retry counter
     if (!isRetry) {
       setRetries(0);
-    }
-
-    // Check if user has claimed in the last hour
-    if (lastClaimTime && Date.now() - lastClaimTime < 3600000) {
-      const timeLeft = Math.ceil((3600000 - (Date.now() - lastClaimTime)) / 60000);
-      const errorMessage = `You can only claim one coupon per hour. Please wait ${timeLeft} minutes before claiming another coupon.`;
-      setError(errorMessage);
-      toast.error(errorMessage);
-      return;
     }
 
     setLoading(true);
@@ -118,9 +130,16 @@ function App() {
       if (!response.ok) {
         console.error('Error response from server:', data);
 
+        // Handle rate limit error (429) specially
+        if (response.status === 429 && data.lastClaimTime) {
+          setLastClaimTime(new Date(data.lastClaimTime).getTime());
+          localStorage.setItem('lastClaimTime', new Date(data.lastClaimTime).getTime().toString());
+          throw new Error(data.error || 'Rate limit exceeded');
+        }
+
         // Check if we should retry based on the error
         if (retries < MAX_RETRIES &&
-          (response.status === 500 || response.status === 503 || response.status === 429) &&
+          (response.status === 500 || response.status === 503) &&
           data.retryAfter) {
           const retryAfterSeconds = data.retryAfter;
           console.log(`Will retry in ${retryAfterSeconds} seconds (attempt ${retries + 1}/${MAX_RETRIES})`);
@@ -187,6 +206,8 @@ function App() {
     return '';
   };
 
+  const isButtonDisabled = loading || !!coupon || (timeLeft !== null && timeLeft > 0);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 flex items-center justify-center p-4 sm:p-6 md:p-8">
       <Toaster position="top-center" />
@@ -237,19 +258,22 @@ function App() {
 
         <button
           onClick={() => claimCoupon(false)}
-          disabled={loading || !!coupon}
+          disabled={isButtonDisabled}
           className={`w-full py-3 px-4 rounded-lg font-semibold text-white transition-colors
-            ${loading || coupon
+            ${isButtonDisabled
               ? 'bg-gray-400 cursor-not-allowed'
               : 'bg-indigo-600 hover:bg-indigo-700'
             }`}
         >
-          {loading ? 'Claiming...' : coupon ? 'Coupon Claimed' : 'Claim Coupon'}
+          {loading ? 'Claiming...' :
+            coupon ? 'Coupon Claimed' :
+              timeLeft ? `Wait ${Math.ceil(timeLeft / 60)} minutes` :
+                'Claim Coupon'}
         </button>
 
-        {!error && !coupon && (
+        {!error && !coupon && !loading && timeLeft === null && (
           <p className="text-sm text-gray-500 text-center mt-4">
-            You can claim one coupon per hour
+            Click the button above to claim your discount coupon
           </p>
         )}
       </div>

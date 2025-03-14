@@ -80,6 +80,18 @@ couponSchema.statics.findAvailable = function () {
   }).sort({ createdAt: -1 });
 };
 
+// Add static method to find next available coupon (sequential distribution)
+couponSchema.statics.findNextAvailable = function () {
+  return this.findOne({
+    expiresAt: { $gt: new Date() },
+    active: true,
+    $or: [
+      { maxRedemptions: null },
+      { $expr: { $lt: ['$timesRedeemed', '$maxRedemptions'] } }
+    ]
+  }).sort({ timesRedeemed: 1, createdAt: 1 });
+};
+
 // Add method to check if coupon is expired
 couponSchema.methods.isExpired = function () {
   return this.expiresAt < new Date();
@@ -99,7 +111,8 @@ couponSchema.methods.incrementRedemptions = async function () {
   if (this.maxRedemptions && this.timesRedeemed >= this.maxRedemptions) {
     this.active = false;
   }
-  return this.save();
+  await this.save();
+  return this;
 };
 
 // Add a method to create a simple coupon for testing
