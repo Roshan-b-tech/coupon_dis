@@ -1,0 +1,110 @@
+import React, { useState, useEffect } from 'react';
+import { Gift, AlertCircle } from 'lucide-react';
+import { Toaster, toast } from 'react-hot-toast';
+
+interface Coupon {
+  code: string;
+  description: string;
+  discount: number;
+}
+
+function App() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [coupon, setCoupon] = useState<Coupon | null>(null);
+
+  useEffect(() => {
+    // Set session ID cookie if not exists
+    if (!document.cookie.includes('sessionId')) {
+      const sessionId = Math.random().toString(36).substring(2);
+      document.cookie = `sessionId=${sessionId}; max-age=86400; path=/`;
+    }
+  }, []);
+
+  const claimCoupon = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const response = await fetch('http://localhost:5000/api/coupons/next', {
+        credentials: 'include',
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to claim coupon');
+      }
+
+      setCoupon(data);
+      toast.success('Coupon claimed successfully!');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+      toast.error(err instanceof Error ? err.message : 'An error occurred');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 flex items-center justify-center p-4">
+      <Toaster position="top-center" />
+
+      <div className="max-w-md w-full bg-white rounded-xl shadow-xl p-8">
+        <div className="text-center mb-8">
+          <div className="flex justify-center mb-4">
+            <Gift className="w-16 h-16 text-indigo-600" />
+          </div>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+            Coupon Distribution
+          </h1>
+          <p className="text-gray-600">
+            Claim your exclusive discount coupon below
+          </p>
+        </div>
+
+        {coupon ? (
+          <div className="bg-indigo-50 rounded-lg p-6 text-center mb-6">
+            <h2 className="text-xl font-semibold text-indigo-900 mb-2">
+              Your Coupon
+            </h2>
+            <div className="bg-white rounded-md p-4 mb-3 shadow-sm">
+              <p className="text-2xl font-mono font-bold text-indigo-600">
+                {coupon.code}
+              </p>
+            </div>
+            <p className="text-indigo-700 mb-2">{coupon.description}</p>
+            <p className="text-lg font-semibold text-indigo-900">
+              {coupon.discount}% OFF
+            </p>
+          </div>
+        ) : error ? (
+          <div className="flex items-center gap-2 bg-red-50 text-red-700 p-4 rounded-lg mb-6">
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <p>{error}</p>
+          </div>
+        ) : null}
+
+        <button
+          onClick={claimCoupon}
+          disabled={loading || !!coupon}
+          className={`w-full py-3 px-4 rounded-lg font-semibold text-white transition-colors
+            ${loading || coupon
+              ? 'bg-gray-400 cursor-not-allowed'
+              : 'bg-indigo-600 hover:bg-indigo-700'
+            }`}
+        >
+          {loading ? 'Claiming...' : coupon ? 'Coupon Claimed' : 'Claim Coupon'}
+        </button>
+
+        {!error && !coupon && (
+          <p className="text-sm text-gray-500 text-center mt-4">
+            You can claim one coupon per hour
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default App;
