@@ -16,6 +16,12 @@ const couponSchema = new mongoose.Schema({
     required: true,
     min: 0,
     max: 100
+  },
+  stripeId: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true
   }
 }, {
   timestamps: true
