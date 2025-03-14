@@ -25,6 +25,7 @@ const connectToMongoDB = async () => {
         console.log('Current environment:', process.env.NODE_ENV);
         console.log('Server port:', process.env.PORT);
         console.log('MongoDB URI status:', process.env.MONGODB_URI ? 'Defined' : 'Undefined');
+        console.log('Current directory:', __dirname);
 
         if (!process.env.MONGODB_URI) {
             console.log('Available environment variables:', Object.keys(process.env));
@@ -93,7 +94,7 @@ app.use(async (req, res, next) => {
     next();
 });
 
-// Routes
+// API Routes
 app.get('/api/coupons/status', async (req, res) => {
     if (!isConnected) {
         return res.status(503).json({ error: 'Database connection not available' });
@@ -147,11 +148,12 @@ app.post('/api/coupons/next', async (req, res) => {
 });
 
 // Serve static files from the dist directory
-app.use(express.static('dist'));
+const distPath = join(__dirname, process.env.NODE_ENV === 'production' ? '.' : 'dist');
+app.use(express.static(distPath));
 
 // Handle all other routes by serving the index.html
 app.get('*', (req, res) => {
-    res.sendFile(join(__dirname, 'dist/index.html'));
+    res.sendFile(join(distPath, 'index.html'));
 });
 
 // Start server and connect to MongoDB
@@ -163,6 +165,7 @@ const startServer = async () => {
             console.log(`Server running on port ${PORT}`);
             console.log(`Server environment: ${process.env.NODE_ENV}`);
             console.log('CORS origins:', ['https://freecoupon60min.netlify.app', 'http://localhost:5173']);
+            console.log('Static files served from:', distPath);
         });
 
         server.on('error', (error) => {
