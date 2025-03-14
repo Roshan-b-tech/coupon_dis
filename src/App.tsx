@@ -4,6 +4,7 @@ import { Toaster, toast } from 'react-hot-toast';
 
 // Define API URL based on environment
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+console.log('Current API URL:', API_URL); // Debug log
 
 interface Coupon {
   code: string;
@@ -29,9 +30,13 @@ function App() {
       setLoading(true);
       setError(null);
 
-      console.log('Attempting to fetch from:', `${API_URL}/api/coupons/next`);
+      // Ensure the API URL is properly formatted
+      const apiUrl = API_URL.replace(/\/+$/, ''); // Remove trailing slashes
+      const endpoint = `${apiUrl}/api/coupons/next`;
 
-      const response = await fetch(`${API_URL}/api/coupons/next`, {
+      console.log('Attempting to fetch from:', endpoint);
+
+      const response = await fetch(endpoint, {
         method: 'GET',
         credentials: 'include',
         headers: {
