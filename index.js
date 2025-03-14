@@ -79,8 +79,9 @@ app.use(cors({
         const allowedOrigins = [
             'https://freecoupon60min.netlify.app',
             'http://localhost:5173',
-            'https://coupon-dis.onrender.com'
-        ];
+            'https://coupon-dis.onrender.com',
+            process.env.CLIENT_URL
+        ].filter(Boolean);
 
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
@@ -88,18 +89,21 @@ app.use(cors({
         if (allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
+            console.log('CORS blocked origin:', origin);
             callback(new Error('Not allowed by CORS'));
         }
     },
     credentials: true,
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Accept', 'Cookie'],
-    exposedHeaders: ['Set-Cookie']
+    allowedHeaders: ['Content-Type', 'Accept', 'Cookie', 'Set-Cookie'],
+    exposedHeaders: ['Set-Cookie'],
+    maxAge: 600 // Cache preflight request for 10 minutes
 }));
 
 // Add pre-flight handling
 app.options('*', cors());
 
+// Parse cookies and JSON body
 app.use(cookieParser());
 app.use(express.json());
 
@@ -148,11 +152,14 @@ app.use((req, res, next) => {
         res.cookie('sessionId', sessionId, {
             maxAge: 86400000, // 24 hours
             httpOnly: true,
-            secure: true,
-            sameSite: 'strict',
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
             path: '/'
         });
         req.cookies.sessionId = sessionId;
+        console.log('New session cookie set:', sessionId);
+    } else {
+        console.log('Existing session found:', req.cookies.sessionId);
     }
     next();
 });
@@ -160,7 +167,21 @@ app.use((req, res, next) => {
 // Connection check middleware
 app.use(async (req, res, next) => {
     if (!isConnected) {
-        await connectToMongoDB();
+        try {
+            await connectToMongoDB();
+            if (!isConnected) {
+                return res.status(503).json({
+                    error: 'Database connection not available, please try again',
+                    retryAfter: 5
+                });
+            }
+        } catch (error) {
+            console.error('Connection middleware error:', error);
+            return res.status(503).json({
+                error: 'Database connection failed, please try again',
+                retryAfter: 5
+            });
+        }
     }
     next();
 });
@@ -248,6 +269,15 @@ async function seedCoupons() {
 
 app.post('/api/coupons/next', async (req, res) => {
     try {
+        // First check database connection
+        if (!isConnected) {
+            console.log('Database not connected during coupon claim attempt');
+            return res.status(503).json({
+                error: 'Service temporarily unavailable. Please try again.',
+                retryAfter: 5
+            });
+        }
+
         const sessionId = req.cookies.sessionId;
         const ipAddress = req.ip || req.connection.remoteAddress;
 
@@ -260,7 +290,7 @@ app.post('/api/coupons/next', async (req, res) => {
         if (!sessionId) {
             console.log('No session ID found in request');
             return res.status(400).json({
-                error: 'No session ID found',
+                error: 'No session ID found. Please refresh the page.',
                 retryAfter: 1
             });
         }
@@ -328,34 +358,45 @@ app.post('/api/coupons/next', async (req, res) => {
                 });
             } catch (stripeError) {
                 console.error('Stripe coupon creation error:', stripeError);
-                throw stripeError;
+                return res.status(500).json({
+                    error: 'Failed to create coupon. Please try again.',
+                    retryAfter: 5
+                });
             }
         }
 
-        console.log('Creating claim for existing coupon:', coupon._id);
-        // Create claim record for existing coupon
-        const claim = await CouponClaim.create({
-            sessionId,
-            ipAddress,
-            couponId: coupon._id,
-            claimedAt: new Date()
-        });
-        console.log('Claim record created:', claim._id);
+        try {
+            console.log('Creating claim for existing coupon:', coupon._id);
+            // Create claim record for existing coupon
+            const claim = await CouponClaim.create({
+                sessionId,
+                ipAddress,
+                couponId: coupon._id,
+                claimedAt: new Date()
+            });
+            console.log('Claim record created:', claim._id);
 
-        res.json({
-            code: coupon.code,
-            description: coupon.description,
-            discount: coupon.discount,
-            expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) // 3 months
-        });
+            return res.json({
+                code: coupon.code,
+                description: coupon.description,
+                discount: coupon.discount,
+                expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) // 3 months
+            });
+        } catch (claimError) {
+            console.error('Error creating claim:', claimError);
+            return res.status(500).json({
+                error: 'Failed to record coupon claim. Please try again.',
+                retryAfter: 5
+            });
+        }
     } catch (error) {
         console.error('Error claiming coupon:', {
             error: error.message,
             stack: error.stack,
             name: error.name
         });
-        res.status(500).json({
-            error: 'Failed to claim coupon: ' + error.message,
+        return res.status(500).json({
+            error: 'An unexpected error occurred. Please try again.',
             retryAfter: 5
         });
     }
