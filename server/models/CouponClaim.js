@@ -43,28 +43,4 @@ couponClaimSchema.methods.isRecent = function () {
   return this.claimedAt > oneHourAgo;
 };
 
-// Add pre-save middleware to validate claim
-couponClaimSchema.pre('save', async function (next) {
-  try {
-    // Check if this is a new claim
-    if (this.isNew) {
-      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-      const recentClaim = await this.constructor.findOne({
-        $or: [
-          { sessionId: this.sessionId },
-          { ipAddress: this.ipAddress }
-        ],
-        claimedAt: { $gt: oneHourAgo }
-      });
-
-      if (recentClaim) {
-        throw new Error('You can only claim one coupon per hour');
-      }
-    }
-    next();
-  } catch (error) {
-    next(error);
-  }
-});
-
 export default mongoose.model('CouponClaim', couponClaimSchema);
