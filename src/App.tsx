@@ -3,8 +3,8 @@ import { Gift, AlertCircle } from 'lucide-react';
 import { Toaster, toast } from 'react-hot-toast';
 
 // Define API URL based on environment
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-console.log('Current API URL:', API_URL); // Debug log
+const API_URL = 'https://coupon-dis.onrender.com';
+console.log('Current API URL:', API_URL);
 
 interface Coupon {
   code: string;
@@ -21,7 +21,7 @@ function App() {
     // Set session ID cookie if not exists
     if (!document.cookie.includes('sessionId')) {
       const sessionId = Math.random().toString(36).substring(2);
-      document.cookie = `sessionId=${sessionId}; max-age=86400; path=/; SameSite=None; Secure`;
+      document.cookie = `sessionId=${sessionId}; max-age=86400; path=/; SameSite=None; Secure; domain=netlify.app`;
     }
   }, []);
 
@@ -30,22 +30,16 @@ function App() {
       setLoading(true);
       setError(null);
 
-      // Ensure the API URL is properly formatted
-      const apiUrl = API_URL.replace(/\/+$/, ''); // Remove trailing slashes
-      const endpoint = `${apiUrl}/api/coupons/next`;
+      console.log('Attempting to fetch from:', `${API_URL}/api/coupons/next`);
 
-      console.log('Attempting to fetch from:', endpoint);
-
-      const response = await fetch(endpoint, {
+      const response = await fetch(`${API_URL}/api/coupons/next`, {
         method: 'GET',
         credentials: 'include',
         headers: {
           'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'Origin': window.location.origin
+          'Content-Type': 'application/json'
         },
-        mode: 'cors',
-        cache: 'no-cache'
+        mode: 'cors'
       });
 
       console.log('Response status:', response.status);
