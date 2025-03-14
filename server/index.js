@@ -1,18 +1,19 @@
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: join(__dirname, '../.env') });
+
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import mongoose from 'mongoose';
-import dotenv from 'dotenv';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
 import Coupon from './models/Coupon.js';
 import CouponClaim from './models/CouponClaim.js';
 
-dotenv.config();
-
 const app = express();
 const PORT = process.env.PORT || 5000;
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Initialize MongoDB connection
 let isConnected = false;
@@ -21,8 +22,16 @@ const connectToMongoDB = async () => {
   if (isConnected) return;
 
   try {
+    console.log('Attempting to connect to MongoDB...');
+    console.log('Environment file path:', join(__dirname, '../.env'));
+    console.log('MongoDB URI:', process.env.MONGODB_URI ? 'URI is defined' : 'URI is undefined');
+    if (!process.env.MONGODB_URI) {
+      console.log('Available environment variables:', Object.keys(process.env));
+      throw new Error('MONGODB_URI is not defined in environment variables');
+    }
+
     await mongoose.connect(process.env.MONGODB_URI, {
-      serverSelectionTimeoutMS: 60000, // Increase timeout to 60 seconds
+      serverSelectionTimeoutMS: 60000,
       socketTimeoutMS: 60000,
       connectTimeoutMS: 60000,
       maxPoolSize: 50,

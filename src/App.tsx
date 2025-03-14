@@ -47,39 +47,39 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-purple-100 to-indigo-100 flex items-center justify-center p-4 sm:p-6 md:p-8">
       <Toaster position="top-center" />
 
-      <div className="max-w-md w-full bg-white rounded-xl shadow-xl p-8">
-        <div className="text-center mb-8">
-          <div className="flex justify-center mb-4">
-            <Gift className="w-16 h-16 text-indigo-600" />
+      <div className="w-full max-w-[95%] sm:max-w-md bg-white rounded-xl shadow-xl p-4 sm:p-6 md:p-8">
+        <div className="text-center mb-6 sm:mb-8">
+          <div className="flex justify-center mb-3 sm:mb-4">
+            <Gift className="w-12 h-12 sm:w-16 sm:h-16 text-indigo-600" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-2">
             Coupon Distribution
           </h1>
-          <p className="text-gray-600">
+          <p className="text-sm sm:text-base text-gray-600">
             Claim your exclusive discount coupon below
           </p>
         </div>
 
         {coupon ? (
-          <div className="bg-indigo-50 rounded-lg p-6 text-center mb-6">
-            <h2 className="text-xl font-semibold text-indigo-900 mb-2">
+          <div className="bg-indigo-50 rounded-lg p-4 sm:p-6 text-center mb-4 sm:mb-6">
+            <h2 className="text-lg sm:text-xl font-semibold text-indigo-900 mb-2">
               Your Coupon
             </h2>
-            <div className="bg-white rounded-md p-4 mb-3 shadow-sm">
-              <p className="text-2xl font-mono font-bold text-indigo-600">
+            <div className="bg-white rounded-md p-3 sm:p-4 mb-2 sm:mb-3 shadow-sm">
+              <p className="text-xl sm:text-2xl font-mono font-bold text-indigo-600 break-all">
                 {coupon.code}
               </p>
             </div>
-            <p className="text-indigo-700 mb-2">{coupon.description}</p>
-            <p className="text-lg font-semibold text-indigo-900">
+            <p className="text-sm sm:text-base text-indigo-700 mb-2">{coupon.description}</p>
+            <p className="text-base sm:text-lg font-semibold text-indigo-900">
               {coupon.discount}% OFF
             </p>
           </div>
         ) : error ? (
-          <div className="flex items-center gap-2 bg-red-50 text-red-700 p-4 rounded-lg mb-6">
+          <div className="flex items-center gap-2 bg-red-50 text-red-700 p-3 sm:p-4 rounded-lg mb-4 sm:mb-6 text-sm sm:text-base">
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
             <p>{error}</p>
           </div>
