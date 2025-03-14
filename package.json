@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node copy-server.js",
+    "prebuild": "node copy-server.js",
+    "build": "vite build",
+    "postbuild": "node copy-server.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "node dist/index.js",
@@ -41,5 +43,8 @@
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.3.0",
     "vite": "^5.4.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
