@@ -14,18 +14,10 @@ const couponSchema = new mongoose.Schema({
     type: Number,
     required: true,
   },
-  isAssigned: {
-    type: Boolean,
-    default: false,
-  },
-  assignedAt: {
+  lastAssignedAt: {
     type: Date,
-  },
-  claimedBy: [{
-    ipAddress: String,
-    sessionId: String,
-    claimedAt: Date
-  }]
+    default: null
+  }
 });
 
 export default mongoose.model('Coupon', couponSchema);

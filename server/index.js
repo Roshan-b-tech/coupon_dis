@@ -132,13 +132,17 @@ app.get('/api/coupons/next', async (req, res) => {
     const ipAddress = req.ip;
     const sessionId = req.cookies.sessionId;
 
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Session ID is required' });
+    }
+
     // Check if user has claimed a coupon in the last hour
     const lastClaim = await CouponClaim.findOne({
       $or: [
         { ipAddress, claimedAt: { $gte: new Date(Date.now() - 3600000) } },
         { sessionId, claimedAt: { $gte: new Date(Date.now() - 3600000) } }
       ]
-    }).maxTimeMS(30000);
+    });
 
     if (lastClaim) {
       const timeLeft = Math.ceil((lastClaim.claimedAt.getTime() + 3600000 - Date.now()) / 60000);
@@ -148,47 +152,30 @@ app.get('/api/coupons/next', async (req, res) => {
       });
     }
 
-    // Get next available coupon that hasn't been claimed by this user
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      // Find a coupon that hasn't been claimed by this user
-      let coupon = await Coupon.findOne({
-        $and: [
-          { isAssigned: false },
-          {
-            $or: [
-              { 'claimedBy.ipAddress': { $ne: ipAddress } },
-              { 'claimedBy.sessionId': { $ne: sessionId } }
-            ]
-          }
-        ]
-      }).sort({ assignedAt: 1, _id: 1 });
+      // Find coupons that haven't been claimed by this user
+      const existingClaims = await CouponClaim.find({
+        $or: [{ ipAddress }, { sessionId }]
+      }).distinct('couponId');
 
-      if (!coupon) {
-        // If no unassigned coupons, find the oldest assigned coupon that hasn't been claimed by this user
-        coupon = await Coupon.findOne({
-          $or: [
-            { 'claimedBy.ipAddress': { $ne: ipAddress } },
-            { 'claimedBy.sessionId': { $ne: sessionId } }
-          ]
-        }).sort({ assignedAt: 1, _id: 1 });
-      }
+      // Get a coupon that hasn't been claimed by this user
+      const coupon = await Coupon.findOne({
+        _id: { $nin: existingClaims }
+      }).sort({ lastAssignedAt: 1 });
 
       if (!coupon) {
         await session.abortTransaction();
-        return res.status(404).json({ error: 'No coupons available' });
+        return res.status(404).json({
+          error: 'No available coupons',
+          message: 'You have already claimed all available coupons. Please try again later.'
+        });
       }
 
-      // Update the coupon
-      coupon.isAssigned = true;
-      coupon.assignedAt = new Date();
-      coupon.claimedBy.push({
-        ipAddress,
-        sessionId,
-        claimedAt: new Date()
-      });
+      // Update coupon's last assigned time
+      coupon.lastAssignedAt = new Date();
       await coupon.save({ session });
 
       // Record the claim
@@ -196,14 +183,16 @@ app.get('/api/coupons/next', async (req, res) => {
         ipAddress,
         sessionId,
         couponId: coupon._id,
+        claimedAt: new Date()
       }], { session });
 
       await session.commitTransaction();
 
+      // Send response
       res.json({
         code: coupon.code,
         description: coupon.description,
-        discount: coupon.discount,
+        discount: coupon.discount
       });
     } catch (error) {
       await session.abortTransaction();
