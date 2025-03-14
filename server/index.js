@@ -267,8 +267,11 @@ app.post('/api/coupons/next', async (req, res) => {
 
     // Increment the coupon's redemption count
     console.log('Incrementing coupon redemption count');
-    coupon.timesRedeemed += 1;
-    await coupon.save();
+    await Coupon.findByIdAndUpdate(
+      coupon._id,
+      { $inc: { timesRedeemed: 1 } },
+      { new: true }
+    );
     console.log('Coupon updated successfully');
 
     res.json({
