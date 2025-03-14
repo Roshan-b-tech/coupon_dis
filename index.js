@@ -62,11 +62,30 @@ const connectToMongoDB = async () => {
 
 // Middleware
 app.use(cors({
-    origin: ['https://freecoupon60min.netlify.app', 'http://localhost:5173'],
+    origin: function (origin, callback) {
+        const allowedOrigins = [
+            'https://freecoupon60min.netlify.app',
+            'http://localhost:5173',
+            'https://coupon-dis.onrender.com'
+        ];
+
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Accept', 'Cookie']
+    allowedHeaders: ['Content-Type', 'Accept', 'Cookie'],
+    exposedHeaders: ['Set-Cookie']
 }));
+
+// Add pre-flight handling
+app.options('*', cors());
 
 app.use(cookieParser());
 app.use(express.json());
@@ -102,8 +121,30 @@ app.get('/api/coupons/status', async (req, res) => {
     }
 
     try {
-        const coupons = await Coupon.find().sort({ claimedAt: 1 });
-        res.json(coupons);
+        // Get all coupons with their claim status
+        const coupons = await Coupon.find();
+
+        // Get all recent claims (within last 24 hours)
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const recentClaims = await CouponClaim.find({
+            claimedAt: { $gt: oneDayAgo }
+        }).populate('couponId');
+
+        // Map coupons to include claim status
+        const couponsWithStatus = coupons.map(coupon => {
+            const claim = recentClaims.find(claim =>
+                claim.couponId._id.toString() === coupon._id.toString()
+            );
+
+            return {
+                ...coupon.toObject(),
+                claimed: !!claim,
+                claimedAt: claim?.claimedAt || null,
+                claimedBy: claim?.sessionId || null
+            };
+        });
+
+        res.json(couponsWithStatus);
     } catch (error) {
         console.error('Error fetching coupons:', error);
         res.status(500).json({ error: 'Internal server error' });
@@ -154,7 +195,7 @@ app.post('/api/coupons/next', async (req, res) => {
 
         const claimedCouponIds = userClaimedCoupons.map(c => c.couponId);
 
-        // Find available coupons that this user hasn't claimed before
+        // Get all available coupons that this user hasn't claimed before
         const availableCoupons = await Coupon.find({
             _id: { $nin: claimedCouponIds }
         });
@@ -173,9 +214,27 @@ app.post('/api/coupons/next', async (req, res) => {
                 return res.status(404).json({ error: 'No coupons available' });
             }
 
-            // Randomly select a coupon from available ones
-            const randomIndex = Math.floor(Math.random() * newAvailableCoupons.length);
-            const newCoupon = newAvailableCoupons[randomIndex];
+            // Get recent claims to avoid giving recently claimed coupons
+            const recentClaimedCouponIds = await CouponClaim.find({
+                claimedAt: { $gt: new Date(Date.now() - 5 * 60 * 1000) } // Last 5 minutes
+            }).select('couponId');
+
+            const recentlyClaimedIds = recentClaimedCouponIds.map(c => c.couponId.toString());
+
+            // Filter out recently claimed coupons
+            const eligibleCoupons = newAvailableCoupons.filter(
+                coupon => !recentlyClaimedIds.includes(coupon._id.toString())
+            );
+
+            if (eligibleCoupons.length === 0) {
+                // If all coupons were recently claimed, wait a bit and try again
+                await new Promise(resolve => setTimeout(resolve, 5000));
+                return res.status(429).json({ error: 'Please try again in a few seconds' });
+            }
+
+            // Randomly select a coupon from eligible ones
+            const randomIndex = Math.floor(Math.random() * eligibleCoupons.length);
+            const newCoupon = eligibleCoupons[randomIndex];
 
             // Create a new claim record
             await CouponClaim.create({
@@ -199,9 +258,27 @@ app.post('/api/coupons/next', async (req, res) => {
             });
         }
 
-        // Randomly select a coupon from available ones
-        const randomIndex = Math.floor(Math.random() * availableCoupons.length);
-        const coupon = availableCoupons[randomIndex];
+        // Get recent claims to avoid giving recently claimed coupons
+        const recentClaimedCouponIds = await CouponClaim.find({
+            claimedAt: { $gt: new Date(Date.now() - 5 * 60 * 1000) } // Last 5 minutes
+        }).select('couponId');
+
+        const recentlyClaimedIds = recentClaimedCouponIds.map(c => c.couponId.toString());
+
+        // Filter out recently claimed coupons from available ones
+        const eligibleCoupons = availableCoupons.filter(
+            coupon => !recentlyClaimedIds.includes(coupon._id.toString())
+        );
+
+        if (eligibleCoupons.length === 0) {
+            // If all coupons were recently claimed, wait a bit and try again
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            return res.status(429).json({ error: 'Please try again in a few seconds' });
+        }
+
+        // Randomly select a coupon from eligible ones
+        const randomIndex = Math.floor(Math.random() * eligibleCoupons.length);
+        const coupon = eligibleCoupons[randomIndex];
 
         // Create a new claim record
         await CouponClaim.create({

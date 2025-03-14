@@ -3,8 +3,10 @@ import { Gift, AlertCircle } from 'lucide-react';
 import { Toaster, toast } from 'react-hot-toast';
 
 // Define API URL based on environment
-const API_URL = 'https://coupon-dis.onrender.com';
+const API_URL = import.meta.env.VITE_API_URL || 'https://coupon-dis.onrender.com';
 console.log('Current API URL:', API_URL);
+console.log('Environment:', import.meta.env.MODE);
+console.log('All environment variables:', import.meta.env);
 
 interface Coupon {
   code: string;
