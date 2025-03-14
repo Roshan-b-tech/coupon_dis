@@ -21,6 +21,11 @@ const couponSchema = new mongoose.Schema({
   assignedAt: {
     type: Date,
   },
-})
+  claimedBy: [{
+    ipAddress: String,
+    sessionId: String,
+    claimedAt: Date
+  }]
+});
 
 export default mongoose.model('Coupon', couponSchema);

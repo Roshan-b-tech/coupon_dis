@@ -148,46 +148,48 @@ app.get('/api/coupons/next', async (req, res) => {
       });
     }
 
-    // Get next available coupon using round-robin approach
+    // Get next available coupon that hasn't been claimed by this user
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      let coupon = await Coupon.findOneAndUpdate(
-        { isAssigned: false },
-        {
-          isAssigned: true,
-          assignedAt: new Date()
-        },
-        {
-          new: true,
-          sort: { assignedAt: 1, _id: 1 },
-          maxTimeMS: 30000,
-          session
-        }
-      );
+      // Find a coupon that hasn't been claimed by this user
+      let coupon = await Coupon.findOne({
+        $and: [
+          { isAssigned: false },
+          {
+            $or: [
+              { 'claimedBy.ipAddress': { $ne: ipAddress } },
+              { 'claimedBy.sessionId': { $ne: sessionId } }
+            ]
+          }
+        ]
+      }).sort({ assignedAt: 1, _id: 1 });
 
       if (!coupon) {
-        // If no unassigned coupons, reset the oldest assigned coupon
-        coupon = await Coupon.findOneAndUpdate(
-          {},
-          {
-            isAssigned: true,
-            assignedAt: new Date()
-          },
-          {
-            new: true,
-            sort: { assignedAt: 1, _id: 1 },
-            maxTimeMS: 30000,
-            session
-          }
-        );
+        // If no unassigned coupons, find the oldest assigned coupon that hasn't been claimed by this user
+        coupon = await Coupon.findOne({
+          $or: [
+            { 'claimedBy.ipAddress': { $ne: ipAddress } },
+            { 'claimedBy.sessionId': { $ne: sessionId } }
+          ]
+        }).sort({ assignedAt: 1, _id: 1 });
       }
 
       if (!coupon) {
         await session.abortTransaction();
         return res.status(404).json({ error: 'No coupons available' });
       }
+
+      // Update the coupon
+      coupon.isAssigned = true;
+      coupon.assignedAt = new Date();
+      coupon.claimedBy.push({
+        ipAddress,
+        sessionId,
+        claimedAt: new Date()
+      });
+      await coupon.save({ session });
 
       // Record the claim
       await CouponClaim.create([{
