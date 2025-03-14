@@ -9,13 +9,7 @@ const couponClaimSchema = new mongoose.Schema({
   sessionId: {
     type: String,
     required: true,
-    index: true,
-    validate: {
-      validator: function (v) {
-        return /^[a-zA-Z0-9]+$/.test(v);
-      },
-      message: props => `${props.value} is not a valid session ID!`
-    }
+    index: true
   },
   couponId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -33,9 +27,8 @@ const couponClaimSchema = new mongoose.Schema({
 });
 
 // Add compound indexes for common queries
-couponClaimSchema.index({ sessionId: 1, claimedAt: -1 });
 couponClaimSchema.index({ ipAddress: 1, claimedAt: -1 });
-couponClaimSchema.index({ couponId: 1, claimedAt: -1 });
+couponClaimSchema.index({ sessionId: 1, claimedAt: -1 });
 
 // Add method to check if claim is recent
 couponClaimSchema.methods.isRecent = function () {

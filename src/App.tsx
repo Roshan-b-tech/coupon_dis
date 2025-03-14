@@ -50,7 +50,16 @@ function App() {
     // Check if there's a last claim time in localStorage
     const storedLastClaimTime = localStorage.getItem('lastClaimTime');
     if (storedLastClaimTime) {
-      setLastClaimTime(parseInt(storedLastClaimTime));
+      const lastClaimTime = parseInt(storedLastClaimTime);
+      const timeSinceLastClaim = Date.now() - lastClaimTime;
+
+      // Only set the last claim time if it's within the last hour
+      if (timeSinceLastClaim < COOLDOWN_PERIOD) {
+        setLastClaimTime(lastClaimTime);
+      } else {
+        // Clear the stored time if it's older than an hour
+        localStorage.removeItem('lastClaimTime');
+      }
     }
   }, []);
 
@@ -60,10 +69,13 @@ function App() {
       const updateTimeLeft = () => {
         const now = Date.now();
         const timeSinceLastClaim = now - lastClaimTime;
+
         if (timeSinceLastClaim < COOLDOWN_PERIOD) {
           setTimeLeft(Math.ceil((COOLDOWN_PERIOD - timeSinceLastClaim) / 1000));
         } else {
           setTimeLeft(null);
+          // Clear the stored time when cooldown is over
+          localStorage.removeItem('lastClaimTime');
         }
       };
 
@@ -132,8 +144,9 @@ function App() {
 
         // Handle rate limit error (429) specially
         if (response.status === 429 && data.lastClaimTime) {
-          setLastClaimTime(new Date(data.lastClaimTime).getTime());
-          localStorage.setItem('lastClaimTime', new Date(data.lastClaimTime).getTime().toString());
+          const lastClaimTime = new Date(data.lastClaimTime).getTime();
+          setLastClaimTime(lastClaimTime);
+          localStorage.setItem('lastClaimTime', lastClaimTime.toString());
           throw new Error(data.error || 'Rate limit exceeded');
         }
 

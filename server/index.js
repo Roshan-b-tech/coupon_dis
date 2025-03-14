@@ -206,92 +206,54 @@ app.get('/api/coupons/status', async (req, res) => {
 app.post('/api/coupons/next', async (req, res) => {
   try {
     console.log('Received coupon claim request');
-    console.log('Request headers:', req.headers);
-    console.log('Request cookies:', req.cookies);
-    console.log('Client IP:', req.ip);
-    console.log('X-Forwarded-For:', req.headers['x-forwarded-for']);
-
     const sessionId = req.cookies.sessionId;
+    const clientIP = req.headers['x-forwarded-for']?.split(',')[0] || req.ip;
+
     if (!sessionId) {
       console.log('No session ID found in cookies');
       return res.status(400).json({ error: 'No session ID found' });
     }
 
-    console.log('Session ID:', sessionId);
-
-    // Check if user has claimed a coupon in the last hour
-    const oneHourAgo = new Date();
-    oneHourAgo.setHours(oneHourAgo.getHours() - 1); // More reliable way to subtract an hour
-
-    console.log('Claim check times:', {
-      currentTime: new Date().toISOString(),
-      oneHourAgo: oneHourAgo.toISOString(),
-      sessionId
+    console.log('Request details:', {
+      sessionId,
+      clientIP,
+      timestamp: new Date().toISOString()
     });
 
-    // First check for any existing claims with explicit date comparison
-    const recentClaims = await CouponClaim.find({
+    // Check for recent claims by both IP and session
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+    // Check IP-based claims
+    const recentIPClaim = await CouponClaim.findOne({
+      ipAddress: clientIP,
+      claimedAt: { $gt: oneHourAgo }
+    }).sort({ claimedAt: -1 });
+
+    // Check session-based claims
+    const recentSessionClaim = await CouponClaim.findOne({
       sessionId: sessionId,
       claimedAt: { $gt: oneHourAgo }
-    }).lean(); // Use lean() for better performance
+    }).sort({ claimedAt: -1 });
 
-    // Log all found claims for debugging
-    console.log('All claims for session:', {
-      sessionId,
-      claimsFound: recentClaims.map(c => ({
-        id: c._id,
-        claimTime: c.claimedAt,
-        elapsedMinutes: Math.floor((Date.now() - new Date(c.claimedAt).getTime()) / (60 * 1000))
-      }))
-    });
-
-    // Double check the timing manually to avoid any timezone issues
-    const validClaims = recentClaims.filter(claim => {
-      const claimTime = new Date(claim.claimedAt);
-      const elapsedMs = Date.now() - claimTime.getTime();
-      const elapsedMinutes = Math.floor(elapsedMs / (60 * 1000));
-
-      console.log('Claim validation:', {
-        claimId: claim._id,
-        claimTime: claimTime.toISOString(),
-        elapsedMinutes,
-        isWithinLastHour: elapsedMinutes < 60
-      });
-
-      return elapsedMinutes < 60;
-    });
-
-    if (validClaims.length > 0) {
-      const mostRecentClaim = validClaims[0];
-      const elapsedMs = Date.now() - new Date(mostRecentClaim.claimedAt).getTime();
-      const minutesLeft = Math.max(0, 60 - Math.floor(elapsedMs / (60 * 1000)));
+    if (recentIPClaim || recentSessionClaim) {
+      const mostRecentClaim = recentIPClaim || recentSessionClaim;
+      const timeSinceLastClaim = Date.now() - mostRecentClaim.claimedAt.getTime();
+      const minutesLeft = Math.ceil((60 * 60 * 1000 - timeSinceLastClaim) / (60 * 1000));
 
       console.log('Claim blocked:', {
-        reason: 'Recent claim exists',
-        claimTime: mostRecentClaim.claimedAt,
-        elapsedMinutes: Math.floor(elapsedMs / (60 * 1000)),
+        reason: recentIPClaim ? 'IP-based cooldown' : 'Session-based cooldown',
+        lastClaimTime: mostRecentClaim.claimedAt,
         minutesLeft,
+        clientIP,
         sessionId
       });
 
-      return res.status(400).json({
-        error: 'You can only claim one coupon per hour',
-        minutesLeft,
+      return res.status(429).json({
+        error: `You can only claim one coupon per hour. Please wait ${minutesLeft} minutes before claiming another coupon.`,
         lastClaimTime: mostRecentClaim.claimedAt,
-        nextAvailableTime: new Date(new Date(mostRecentClaim.claimedAt).getTime() + 60 * 60 * 1000).toISOString(),
-        debug: {
-          currentTime: new Date().toISOString(),
-          lastClaimTime: mostRecentClaim.claimedAt,
-          elapsedMinutes: Math.floor(elapsedMs / (60 * 1000))
-        }
+        minutesLeft
       });
     }
-
-    console.log('Claim check passed:', {
-      sessionId,
-      validClaimsFound: validClaims.length,
-      proceeding: 'Searching for available coupon'
-    });
 
     // Find an unclaimed coupon
     const coupon = await Coupon.findOne({
@@ -308,26 +270,27 @@ app.post('/api/coupons/next', async (req, res) => {
       return res.status(404).json({ error: 'No coupons available' });
     }
 
-    console.log('Found available coupon:', coupon);
-
     // Create a claim record
-    console.log('Creating claim record');
     const claim = await CouponClaim.create({
       sessionId: sessionId,
-      ipAddress: req.headers['x-forwarded-for']?.split(',')[0] || req.ip,
+      ipAddress: clientIP,
       couponId: coupon._id,
       claimedAt: new Date()
     });
-    console.log('Claim record created:', claim);
 
     // Increment the coupon's redemption count
-    console.log('Incrementing coupon redemption count');
     await Coupon.findByIdAndUpdate(
       coupon._id,
       { $inc: { timesRedeemed: 1 } },
       { new: true }
     );
-    console.log('Coupon updated successfully');
+
+    console.log('Coupon claimed successfully:', {
+      couponCode: coupon.code,
+      sessionId,
+      clientIP,
+      timestamp: new Date().toISOString()
+    });
 
     res.json({
       code: coupon.code,
@@ -339,43 +302,31 @@ app.post('/api/coupons/next', async (req, res) => {
     });
   } catch (error) {
     console.error('Error claiming coupon:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stack: error.stack,
-      name: error.name,
-      code: error.code,
-      errors: error.errors // For validation errors
-    });
-
-    // Send more specific error message
-    const errorMessage = error.name === 'ValidationError'
-      ? 'Invalid data provided'
-      : 'Failed to claim coupon';
-
     res.status(500).json({
-      error: errorMessage,
+      error: 'Failed to claim coupon',
       details: error.message
     });
   }
 });
 
-// Add debug route to check claims
+// Debug routes
 app.get('/api/debug/claims', async (req, res) => {
   try {
     const claims = await CouponClaim.find().sort({ claimedAt: -1 });
     res.json(claims);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error fetching claims:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Add debug route to clear claims
 app.post('/api/debug/clear-claims', async (req, res) => {
   try {
     await CouponClaim.deleteMany({});
-    res.json({ message: 'All claims cleared' });
+    res.json({ message: 'All claims cleared successfully' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error clearing claims:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
