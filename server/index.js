@@ -141,8 +141,23 @@ app.use(cors({
   origin: ['https://freecoupon60min.netlify.app', 'http://localhost:5173'],
   credentials: true,
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Accept', 'Cookie']
+  allowedHeaders: ['Content-Type', 'Accept', 'Cookie', 'Origin'],
+  exposedHeaders: ['Set-Cookie'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
+
+// Add OPTIONS handler for preflight requests
+app.options('*', cors({
+  origin: ['https://freecoupon60min.netlify.app', 'http://localhost:5173'],
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Accept', 'Cookie', 'Origin'],
+  exposedHeaders: ['Set-Cookie'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+}));
+
 app.use(cookieParser());
 app.use(express.json());
 
@@ -193,6 +208,8 @@ app.post('/api/coupons/next', async (req, res) => {
     console.log('Received coupon claim request');
     console.log('Request headers:', req.headers);
     console.log('Request cookies:', req.cookies);
+    console.log('Client IP:', req.ip);
+    console.log('X-Forwarded-For:', req.headers['x-forwarded-for']);
 
     const sessionId = req.cookies.sessionId;
     if (!sessionId) {
@@ -237,9 +254,12 @@ app.post('/api/coupons/next', async (req, res) => {
 
     // Create a claim record
     console.log('Creating claim record');
+    const clientIp = req.headers['x-forwarded-for'] || req.ip;
+    console.log('Using IP address:', clientIp);
+
     const claim = await CouponClaim.create({
       sessionId: sessionId,
-      ipAddress: req.ip,
+      ipAddress: clientIp,
       couponId: coupon._id,
       claimedAt: new Date()
     });
@@ -265,9 +285,19 @@ app.post('/api/coupons/next', async (req, res) => {
       message: error.message,
       stack: error.stack,
       name: error.name,
-      code: error.code
+      code: error.code,
+      errors: error.errors // For validation errors
     });
-    res.status(500).json({ error: 'Failed to claim coupon' });
+
+    // Send more specific error message
+    const errorMessage = error.name === 'ValidationError'
+      ? 'Invalid data provided'
+      : 'Failed to claim coupon';
+
+    res.status(500).json({
+      error: errorMessage,
+      details: error.message
+    });
   }
 });
 

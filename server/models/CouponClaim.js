@@ -4,14 +4,7 @@ const couponClaimSchema = new mongoose.Schema({
   ipAddress: {
     type: String,
     required: true,
-    index: true,
-    validate: {
-      validator: function (v) {
-        return /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(v) || // IPv4
-          /^[0-9a-fA-F:]+$/.test(v);                    // IPv6
-      },
-      message: props => `${props.value} is not a valid IP address!`
-    }
+    index: true
   },
   sessionId: {
     type: String,
