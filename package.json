@@ -5,9 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "prebuild": "node copy-server.js",
-    "build": "vite build",
-    "postbuild": "node copy-server.js",
+    "build": "vite build && node copy-server.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "node dist/index.js",
