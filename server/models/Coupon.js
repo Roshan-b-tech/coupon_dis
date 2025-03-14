@@ -54,7 +54,9 @@ const couponSchema = new mongoose.Schema({
     index: true
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
 
 // Add static method to find available coupons
@@ -89,6 +91,24 @@ couponSchema.methods.incrementRedemptions = async function () {
     this.active = false;
   }
   return this.save();
+};
+
+// Add a method to create a simple coupon for testing
+couponSchema.statics.createTestCoupon = async function () {
+  const code = 'TEST_' + Date.now();
+  const coupon = new this({
+    code,
+    description: 'Test coupon',
+    discount: 25,
+    stripeId: code,
+    expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+    duration: 'once',
+    maxRedemptions: 100,
+    timesRedeemed: 0,
+    active: true
+  });
+  await coupon.save();
+  return coupon;
 };
 
 export default mongoose.model('Coupon', couponSchema);

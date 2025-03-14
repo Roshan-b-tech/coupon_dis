@@ -134,7 +134,21 @@ function App() {
       }
 
       console.log('Coupon data received:', data);
-      setCoupon(data);
+
+      // Create a complete coupon object with default values for missing fields
+      const completeCoupon: Coupon = {
+        code: data.code || 'UNKNOWN',
+        description: data.description || 'Discount coupon',
+        discount: data.discount || 0,
+        expiresAt: data.expiresAt || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+        duration: data.duration || 'once',
+        duration_in_months: data.duration_in_months,
+        maxRedemptions: data.maxRedemptions,
+        timesRedeemed: data.timesRedeemed || 0,
+        active: data.active !== undefined ? data.active : true
+      };
+
+      setCoupon(completeCoupon);
       setLastClaimTime(Date.now());
       localStorage.setItem('lastClaimTime', Date.now().toString());
       toast.success('Coupon claimed successfully!');

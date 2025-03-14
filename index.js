@@ -2,19 +2,19 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import Stripe from 'stripe';
+import express from 'express';
+import cors from 'cors';
+import cookieParser from 'cookie-parser';
+import mongoose from 'mongoose';
+import rateLimit from 'express-rate-limit';
+import Coupon from './server/models/Coupon.js';
+import CouponClaim from './server/models/CouponClaim.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config();
 
 // Define paths early
 const distPath = join(__dirname, process.env.NODE_ENV === 'production' ? '.' : 'dist');
-
-import express from 'express';
-import cors from 'cors';
-import cookieParser from 'cookie-parser';
-import mongoose from 'mongoose';
-import Coupon from './server/models/Coupon.js';
-import CouponClaim from './server/models/CouponClaim.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -43,10 +43,16 @@ const connectToMongoDB = async () => {
             throw new Error('MONGODB_URI is not defined in environment variables');
         }
 
+        // Updated connection options
         await mongoose.connect(process.env.MONGODB_URI, {
             useNewUrlParser: true,
             useUnifiedTopology: true,
-            serverSelectionTimeoutMS: 5000
+            serverSelectionTimeoutMS: 30000, // Increased from 5000 to 30000
+            socketTimeoutMS: 45000, // Added socket timeout
+            connectTimeoutMS: 30000, // Added connect timeout
+            heartbeatFrequencyMS: 10000, // Added heartbeat frequency
+            retryWrites: true,
+            w: 'majority'
         });
 
         // Test the connection
@@ -111,18 +117,25 @@ app.use(cookieParser());
 app.use(express.json());
 
 // Add rate limiting middleware
-const rateLimit = require('express-rate-limit');
-
-// Rate limiter for coupon claims
 const couponLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
-    max: 1, // 1 request per hour
-    message: 'Too many coupon claims from this IP, please try again later.',
+    max: 5, // Increased from 1 to 5 to allow for testing
+    message: {
+        error: 'Too many coupon claims from this IP, please try again later.',
+        retryAfter: 60 * 60 // 1 hour in seconds
+    },
     standardHeaders: true,
     legacyHeaders: false,
-    skipFailedRequests: false,
+    skipFailedRequests: true, // Don't count failed requests
     keyGenerator: (req) => {
-        return req.ip || req.connection.remoteAddress;
+        // Use IP address as the key, but allow for testing
+        const ip = req.ip || req.connection.remoteAddress;
+        console.log('Rate limiter key (IP):', ip);
+        return ip;
+    },
+    handler: (req, res, next, options) => {
+        console.log('Rate limit exceeded for IP:', req.ip);
+        res.status(429).json(options.message);
     }
 });
 
@@ -242,50 +255,43 @@ app.get('/api/coupons/status', async (req, res) => {
     }
 });
 
-// Modify the seedCoupons function to create Stripe coupons
-async function seedCoupons() {
+// Add a test endpoint to check coupon response
+app.get('/api/test-coupon', async (req, res) => {
     try {
-        const count = await Coupon.countDocuments();
-        if (count === 0) {
-            // Create a Stripe coupon
-            let stripeCoupon;
-            let useLocalFallback = false;
+        // Find a coupon
+        const coupon = await Coupon.findOne().lean();
 
-            try {
-                stripeCoupon = await stripe.coupons.create({
-                    duration: 'repeating',
-                    duration_in_months: 3,
-                    percent_off: 25.5,
-                    id: `SAVE25_${Date.now()}`, // Generate unique ID
-                    max_redemptions: 100 // Limit total uses
-                });
-                console.log('Stripe coupon created successfully during seed');
-            } catch (stripeError) {
-                console.error('Stripe API error during seed, using local fallback:', stripeError.message);
-                useLocalFallback = true;
-            }
-
-            const localCouponId = `LOCAL_${Date.now()}`;
-            // Store the reference in our database
-            const coupon = new Coupon({
-                code: stripeCoupon ? stripeCoupon.id : localCouponId,
-                description: 'Save 25.5% on your purchase',
-                discount: 25.5,
-                stripeId: stripeCoupon ? stripeCoupon.id : localCouponId,
-                expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 3 months
-                duration: stripeCoupon ? stripeCoupon.duration : 'repeating',
-                duration_in_months: stripeCoupon ? stripeCoupon.duration_in_months : 3,
-                maxRedemptions: stripeCoupon ? stripeCoupon.max_redemptions : 100,
-                timesRedeemed: 0,
-                active: true
-            });
-            await coupon.save();
-            console.log('Initial coupon created successfully:', useLocalFallback ? '(local fallback)' : '(Stripe)');
+        if (!coupon) {
+            return res.status(404).json({ error: 'No coupons found' });
         }
+
+        console.log('Test endpoint - Found coupon:', JSON.stringify(coupon));
+
+        // Create a simple response with all fields
+        const response = {
+            id: coupon._id.toString(),
+            code: coupon.code,
+            description: coupon.description,
+            discount: coupon.discount,
+            expiresAt: coupon.expiresAt,
+            duration: coupon.duration,
+            duration_in_months: coupon.duration_in_months,
+            maxRedemptions: coupon.maxRedemptions,
+            timesRedeemed: coupon.timesRedeemed,
+            active: coupon.active
+        };
+
+        console.log('Test endpoint - Sending response:', JSON.stringify(response));
+
+        return res.json(response);
     } catch (error) {
-        console.error('Error seeding coupons:', error);
+        console.error('Test endpoint error:', error);
+        return res.status(500).json({ error: 'Test endpoint error' });
     }
-}
+});
+
+// Serve static files from the dist directory
+app.use(express.static(distPath));
 
 // Wrap the entire endpoint in a try-catch to ensure all errors are caught
 app.post('/api/coupons/next', async (req, res) => {
@@ -390,17 +396,25 @@ app.post('/api/coupons/next', async (req, res) => {
                 // Increment redemption count
                 await newCoupon.incrementRedemptions();
 
-                return res.json({
-                    code: newCoupon.code,
-                    description: newCoupon.description,
-                    discount: newCoupon.discount,
-                    expiresAt: newCoupon.expiresAt,
-                    duration: newCoupon.duration,
-                    duration_in_months: newCoupon.duration_in_months,
-                    maxRedemptions: newCoupon.maxRedemptions,
-                    timesRedeemed: newCoupon.timesRedeemed,
-                    active: newCoupon.active
-                });
+                // Create a complete response object with all fields
+                const fullCoupon = await Coupon.findById(newCoupon._id).lean();
+                console.log('Full coupon from database:', JSON.stringify(fullCoupon));
+
+                // Ensure all fields are included in the response
+                const response = {
+                    code: fullCoupon.code,
+                    description: fullCoupon.description,
+                    discount: fullCoupon.discount,
+                    expiresAt: fullCoupon.expiresAt,
+                    duration: fullCoupon.duration,
+                    duration_in_months: fullCoupon.duration_in_months,
+                    maxRedemptions: fullCoupon.maxRedemptions,
+                    timesRedeemed: fullCoupon.timesRedeemed,
+                    active: fullCoupon.active
+                };
+                console.log('Sending coupon response:', JSON.stringify(response));
+
+                return res.json(response);
             } catch (stripeError) {
                 console.error('Stripe coupon creation error:', {
                     message: stripeError.message,
@@ -458,17 +472,25 @@ app.post('/api/coupons/next', async (req, res) => {
             // Increment redemption count
             await coupon.incrementRedemptions();
 
-            return res.json({
-                code: coupon.code,
-                description: coupon.description,
-                discount: coupon.discount,
-                expiresAt: coupon.expiresAt,
-                duration: coupon.duration,
-                duration_in_months: coupon.duration_in_months,
-                maxRedemptions: coupon.maxRedemptions,
-                timesRedeemed: coupon.timesRedeemed,
-                active: coupon.active
-            });
+            // Create a complete response object with all fields
+            const fullCoupon = await Coupon.findById(coupon._id).lean();
+            console.log('Full coupon from database:', JSON.stringify(fullCoupon));
+
+            // Ensure all fields are included in the response
+            const response = {
+                code: fullCoupon.code,
+                description: fullCoupon.description,
+                discount: fullCoupon.discount,
+                expiresAt: fullCoupon.expiresAt,
+                duration: fullCoupon.duration,
+                duration_in_months: fullCoupon.duration_in_months,
+                maxRedemptions: fullCoupon.maxRedemptions,
+                timesRedeemed: fullCoupon.timesRedeemed,
+                active: fullCoupon.active
+            };
+            console.log('Sending coupon response:', JSON.stringify(response));
+
+            return res.json(response);
         } catch (claimError) {
             console.error('Error creating claim:', claimError);
             return res.status(500).json({
@@ -496,9 +518,6 @@ app.post('/api/coupons/next', async (req, res) => {
         });
     }
 });
-
-// Serve static files from the dist directory
-app.use(express.static(distPath));
 
 // Handle all other routes by serving the index.html
 app.get('*', (req, res) => {
@@ -536,4 +555,49 @@ process.on('uncaughtException', (error) => {
     process.exit(1);
 });
 
-startServer().catch(console.error); 
+startServer().catch(console.error);
+
+// Modify the seedCoupons function to create Stripe coupons
+async function seedCoupons() {
+    try {
+        const count = await Coupon.countDocuments();
+        if (count === 0) {
+            // Create a Stripe coupon
+            let stripeCoupon;
+            let useLocalFallback = false;
+
+            try {
+                stripeCoupon = await stripe.coupons.create({
+                    duration: 'repeating',
+                    duration_in_months: 3,
+                    percent_off: 25.5,
+                    id: `SAVE25_${Date.now()}`, // Generate unique ID
+                    max_redemptions: 100 // Limit total uses
+                });
+                console.log('Stripe coupon created successfully during seed');
+            } catch (stripeError) {
+                console.error('Stripe API error during seed, using local fallback:', stripeError.message);
+                useLocalFallback = true;
+            }
+
+            const localCouponId = `LOCAL_${Date.now()}`;
+            // Store the reference in our database
+            const coupon = new Coupon({
+                code: stripeCoupon ? stripeCoupon.id : localCouponId,
+                description: 'Save 25.5% on your purchase',
+                discount: 25.5,
+                stripeId: stripeCoupon ? stripeCoupon.id : localCouponId,
+                expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 3 months
+                duration: stripeCoupon ? stripeCoupon.duration : 'repeating',
+                duration_in_months: stripeCoupon ? stripeCoupon.duration_in_months : 3,
+                maxRedemptions: stripeCoupon ? stripeCoupon.max_redemptions : 100,
+                timesRedeemed: 0,
+                active: true
+            });
+            await coupon.save();
+            console.log('Initial coupon created successfully:', useLocalFallback ? '(local fallback)' : '(Stripe)');
+        }
+    } catch (error) {
+        console.error('Error seeding coupons:', error);
+    }
+} 
