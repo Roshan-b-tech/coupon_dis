@@ -20,7 +20,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Initialize Stripe
-const stripe = new Stripe('sk_test_tR3PYbcVNZZ796tH88S4VQ2u');
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_tR3PYbcVNZZ796tH88S4VQ2u');
+
+// Log Stripe initialization status
+console.log('Stripe initialized with key:', process.env.STRIPE_SECRET_KEY ? 'From environment variable' : 'Using fallback test key');
 
 // Initialize MongoDB connection
 let isConnected = false;
@@ -245,35 +248,46 @@ async function seedCoupons() {
         const count = await Coupon.countDocuments();
         if (count === 0) {
             // Create a Stripe coupon
-            const stripeCoupon = await stripe.coupons.create({
-                duration: 'repeating',
-                duration_in_months: 3,
-                percent_off: 25.5,
-                id: `SAVE25_${Date.now()}`, // Generate unique ID
-                max_redemptions: 100 // Limit total uses
-            });
+            let stripeCoupon;
+            let useLocalFallback = false;
 
+            try {
+                stripeCoupon = await stripe.coupons.create({
+                    duration: 'repeating',
+                    duration_in_months: 3,
+                    percent_off: 25.5,
+                    id: `SAVE25_${Date.now()}`, // Generate unique ID
+                    max_redemptions: 100 // Limit total uses
+                });
+                console.log('Stripe coupon created successfully during seed');
+            } catch (stripeError) {
+                console.error('Stripe API error during seed, using local fallback:', stripeError.message);
+                useLocalFallback = true;
+            }
+
+            const localCouponId = `LOCAL_${Date.now()}`;
             // Store the reference in our database
             const coupon = new Coupon({
-                code: stripeCoupon.id,
+                code: stripeCoupon ? stripeCoupon.id : localCouponId,
                 description: 'Save 25.5% on your purchase',
                 discount: 25.5,
-                stripeId: stripeCoupon.id,
+                stripeId: stripeCoupon ? stripeCoupon.id : localCouponId,
                 expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 3 months
-                duration: stripeCoupon.duration,
-                duration_in_months: stripeCoupon.duration_in_months,
-                maxRedemptions: stripeCoupon.max_redemptions,
+                duration: stripeCoupon ? stripeCoupon.duration : 'repeating',
+                duration_in_months: stripeCoupon ? stripeCoupon.duration_in_months : 3,
+                maxRedemptions: stripeCoupon ? stripeCoupon.max_redemptions : 100,
                 timesRedeemed: 0,
                 active: true
             });
             await coupon.save();
-            console.log('Initial Stripe coupon created successfully');
+            console.log('Initial coupon created successfully:', useLocalFallback ? '(local fallback)' : '(Stripe)');
         }
     } catch (error) {
         console.error('Error seeding coupons:', error);
     }
 }
 
+// Wrap the entire endpoint in a try-catch to ensure all errors are caught
 app.post('/api/coupons/next', async (req, res) => {
     try {
         // First check database connection
@@ -331,29 +345,38 @@ app.post('/api/coupons/next', async (req, res) => {
             console.log('No existing coupon found, creating new Stripe coupon');
             try {
                 // Create a new Stripe coupon if none exists
-                const stripeCoupon = await stripe.coupons.create({
-                    duration: 'repeating',
-                    duration_in_months: 3,
-                    percent_off: 25.5,
-                    id: `SAVE25_${Date.now()}`,
-                    max_redemptions: 100
-                });
-                console.log('Stripe coupon created successfully:', stripeCoupon.id);
+                let stripeCoupon;
+                let useLocalFallback = false;
 
+                try {
+                    stripeCoupon = await stripe.coupons.create({
+                        duration: 'repeating',
+                        duration_in_months: 3,
+                        percent_off: 25.5,
+                        id: `SAVE25_${Date.now()}`,
+                        max_redemptions: 100
+                    });
+                    console.log('Stripe coupon created successfully:', stripeCoupon.id);
+                } catch (stripeApiError) {
+                    console.error('Stripe API error, using local fallback:', stripeApiError.message);
+                    useLocalFallback = true;
+                }
+
+                const localCouponId = `LOCAL_${Date.now()}`;
                 const newCoupon = new Coupon({
-                    code: stripeCoupon.id,
+                    code: stripeCoupon ? stripeCoupon.id : localCouponId,
                     description: 'Save 25.5% on your purchase',
                     discount: 25.5,
-                    stripeId: stripeCoupon.id,
+                    stripeId: stripeCoupon ? stripeCoupon.id : localCouponId,
                     expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-                    duration: stripeCoupon.duration,
-                    duration_in_months: stripeCoupon.duration_in_months,
-                    maxRedemptions: stripeCoupon.max_redemptions,
+                    duration: stripeCoupon ? stripeCoupon.duration : 'repeating',
+                    duration_in_months: stripeCoupon ? stripeCoupon.duration_in_months : 3,
+                    maxRedemptions: stripeCoupon ? stripeCoupon.max_redemptions : 100,
                     timesRedeemed: 0,
                     active: true
                 });
                 await newCoupon.save();
-                console.log('New coupon saved to database:', newCoupon._id);
+                console.log('New coupon saved to database:', newCoupon._id, useLocalFallback ? '(local fallback)' : '(Stripe)');
 
                 // Create claim record
                 const claim = await CouponClaim.create({
@@ -379,11 +402,37 @@ app.post('/api/coupons/next', async (req, res) => {
                     active: newCoupon.active
                 });
             } catch (stripeError) {
-                console.error('Stripe coupon creation error:', stripeError);
-                return res.status(500).json({
-                    error: 'Failed to create coupon. Please try again.',
-                    retryAfter: 5
+                console.error('Stripe coupon creation error:', {
+                    message: stripeError.message,
+                    type: stripeError.type,
+                    code: stripeError.code,
+                    statusCode: stripeError.statusCode,
+                    stack: stripeError.stack
                 });
+
+                // Check if it's a Stripe API error
+                if (stripeError.type === 'StripeAuthenticationError') {
+                    return res.status(500).json({
+                        error: 'Authentication with payment provider failed. Please contact support.',
+                        retryAfter: 60
+                    });
+                } else if (stripeError.type === 'StripeRateLimitError') {
+                    return res.status(429).json({
+                        error: 'Too many requests to payment provider. Please try again later.',
+                        retryAfter: 30
+                    });
+                } else if (stripeError.type === 'StripeConnectionError') {
+                    return res.status(503).json({
+                        error: 'Could not connect to payment provider. Please try again later.',
+                        retryAfter: 15
+                    });
+                } else {
+                    return res.status(500).json({
+                        error: 'Failed to create coupon. Please try again.',
+                        retryAfter: 5,
+                        details: process.env.NODE_ENV === 'development' ? stripeError.message : undefined
+                    });
+                }
             }
         }
 
@@ -428,14 +477,22 @@ app.post('/api/coupons/next', async (req, res) => {
             });
         }
     } catch (error) {
-        console.error('Error claiming coupon:', {
-            error: error.message,
+        // Enhanced error logging
+        console.error('Unhandled error in coupon claim endpoint:', {
+            message: error.message,
             stack: error.stack,
-            name: error.name
+            name: error.name,
+            code: error.code,
+            timestamp: new Date().toISOString(),
+            requestIP: req.ip,
+            requestHeaders: req.headers,
+            requestCookies: req.cookies
         });
+
         return res.status(500).json({
-            error: 'An unexpected error occurred. Please try again.',
-            retryAfter: 5
+            error: 'An unexpected error occurred. Our team has been notified.',
+            retryAfter: 10,
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });

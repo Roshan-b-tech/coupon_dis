@@ -25,6 +25,9 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [coupon, setCoupon] = useState<Coupon | null>(null);
   const [lastClaimTime, setLastClaimTime] = useState<number | null>(null);
+  const [retries, setRetries] = useState(0);
+  const [retryTimeout, setRetryTimeout] = useState<NodeJS.Timeout | null>(null);
+  const MAX_RETRIES = 3;
 
   useEffect(() => {
     // Set session ID cookie if not exists
@@ -43,7 +46,28 @@ function App() {
     }
   }, []);
 
-  const claimCoupon = async () => {
+  // Function to clear any existing retry timeout
+  const clearRetryTimeout = () => {
+    if (retryTimeout) {
+      clearTimeout(retryTimeout);
+      setRetryTimeout(null);
+    }
+  };
+
+  // Clean up on unmount
+  useEffect(() => {
+    return () => clearRetryTimeout();
+  }, []);
+
+  const claimCoupon = async (isRetry = false) => {
+    // Clear any existing retry timeout
+    clearRetryTimeout();
+
+    // If not a retry, reset the retry counter
+    if (!isRetry) {
+      setRetries(0);
+    }
+
     // Check if user has claimed in the last hour
     if (lastClaimTime && Date.now() - lastClaimTime < 3600000) {
       const timeLeft = Math.ceil((3600000 - (Date.now() - lastClaimTime)) / 60000);
@@ -58,6 +82,7 @@ function App() {
     try {
       console.log('Current cookies:', document.cookie);
       console.log('Fetching from:', API_URL);
+      console.log('Attempt number:', retries + 1);
 
       const response = await fetch(`${API_URL}/api/coupons/next`, {
         method: 'POST',
@@ -68,12 +93,47 @@ function App() {
         }
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to claim coupon');
+      console.log('Response status:', response.status);
+      console.log('Response headers:', Object.fromEntries([...response.headers.entries()]));
+
+      const responseText = await response.text();
+      console.log('Response body:', responseText);
+
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error('Error parsing JSON response:', parseError);
+        throw new Error('Invalid response format from server');
       }
 
-      const data = await response.json();
+      if (!response.ok) {
+        console.error('Error response from server:', data);
+
+        // Check if we should retry based on the error
+        if (retries < MAX_RETRIES &&
+          (response.status === 500 || response.status === 503 || response.status === 429) &&
+          data.retryAfter) {
+          const retryAfterSeconds = data.retryAfter;
+          console.log(`Will retry in ${retryAfterSeconds} seconds (attempt ${retries + 1}/${MAX_RETRIES})`);
+
+          setError(`Temporary error. Retrying in ${retryAfterSeconds} seconds... (${retries + 1}/${MAX_RETRIES})`);
+
+          // Set up retry
+          const timeout = setTimeout(() => {
+            setRetries(prev => prev + 1);
+            claimCoupon(true);
+          }, retryAfterSeconds * 1000);
+
+          setRetryTimeout(timeout);
+          setLoading(false);
+          return;
+        }
+
+        throw new Error(data.error || 'Failed to claim coupon');
+      }
+
+      console.log('Coupon data received:', data);
       setCoupon(data);
       setLastClaimTime(Date.now());
       localStorage.setItem('lastClaimTime', Date.now().toString());
@@ -154,7 +214,7 @@ function App() {
         ) : null}
 
         <button
-          onClick={claimCoupon}
+          onClick={() => claimCoupon(false)}
           disabled={loading || !!coupon}
           className={`w-full py-3 px-4 rounded-lg font-semibold text-white transition-colors
             ${loading || coupon
