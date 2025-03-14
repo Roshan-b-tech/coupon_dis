@@ -42,10 +42,10 @@ function App() {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
+          'Origin': window.location.origin
         },
         mode: 'cors',
-        cache: 'no-cache',
-        referrerPolicy: 'no-referrer'
+        cache: 'no-cache'
       });
 
       console.log('Response status:', response.status);

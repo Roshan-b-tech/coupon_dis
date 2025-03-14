@@ -90,9 +90,25 @@ async function seedCoupons() {
 }
 
 // Middleware
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://freecoupon60min.netlify.app',
+  'https://coupon-dis.onrender.com'
+];
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.indexOf(origin) === -1) {
+      return callback(new Error('CORS not allowed'));
+    }
+    return callback(null, true);
+  },
   credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
 }));
 app.use(cookieParser());
 app.use(express.json());
