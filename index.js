@@ -90,15 +90,53 @@ app.options('*', cors());
 app.use(cookieParser());
 app.use(express.json());
 
-// Add cookie check middleware
+// Add rate limiting middleware
+const rateLimit = require('express-rate-limit');
+
+// Rate limiter for coupon claims
+const couponLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 1, // 1 request per hour
+    message: 'Too many coupon claims from this IP, please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipFailedRequests: false,
+    keyGenerator: (req) => {
+        return req.ip || req.connection.remoteAddress;
+    }
+});
+
+// Rate limiter for status checks
+const statusLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 30, // 30 requests per minute
+    message: 'Too many status checks, please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false
+});
+
+// Apply rate limiters
+app.use('/api/coupons/next', couponLimiter);
+app.use('/api/coupons/status', statusLimiter);
+
+// Add security headers middleware
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    next();
+});
+
+// Enhanced cookie check middleware
 app.use((req, res, next) => {
     if (!req.cookies.sessionId && req.path !== '/api/coupons/status') {
-        const sessionId = Math.random().toString(36).substring(2);
+        const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
         res.cookie('sessionId', sessionId, {
             maxAge: 86400000, // 24 hours
             httpOnly: true,
             secure: true,
-            sameSite: 'none',
+            sameSite: 'strict',
             path: '/'
         });
         req.cookies.sessionId = sessionId;
@@ -117,7 +155,10 @@ app.use(async (req, res, next) => {
 // API Routes
 app.get('/api/coupons/status', async (req, res) => {
     if (!isConnected) {
-        return res.status(503).json({ error: 'Database connection not available' });
+        return res.status(503).json({
+            error: 'Database connection not available',
+            retryAfter: 30 // seconds
+        });
     }
 
     try {
@@ -130,24 +171,37 @@ app.get('/api/coupons/status', async (req, res) => {
             claimedAt: { $gt: oneDayAgo }
         }).populate('couponId');
 
-        // Map coupons to include claim status
+        // Map coupons to include claim status and availability
         const couponsWithStatus = coupons.map(coupon => {
             const claim = recentClaims.find(claim =>
                 claim.couponId._id.toString() === coupon._id.toString()
             );
 
+            const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+            const isRecentlyClaimed = claim && claim.claimedAt > tenMinutesAgo;
+
             return {
                 ...coupon.toObject(),
                 claimed: !!claim,
                 claimedAt: claim?.claimedAt || null,
-                claimedBy: claim?.sessionId || null
+                claimedBy: claim?.sessionId || null,
+                available: !isRecentlyClaimed,
+                nextAvailable: isRecentlyClaimed ?
+                    new Date(claim.claimedAt.getTime() + 10 * 60 * 1000) : null
             };
         });
 
-        res.json(couponsWithStatus);
+        res.json({
+            coupons: couponsWithStatus,
+            totalAvailable: couponsWithStatus.filter(c => c.available).length,
+            totalCoupons: couponsWithStatus.length
+        });
     } catch (error) {
         console.error('Error fetching coupons:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({
+            error: 'Internal server error',
+            retryAfter: 5 // seconds
+        });
     }
 });
 
@@ -157,13 +211,24 @@ app.post('/api/coupons/next', async (req, res) => {
         const ipAddress = req.ip || req.connection.remoteAddress;
 
         if (!sessionId) {
-            return res.status(400).json({ error: 'No session ID found' });
+            return res.status(400).json({
+                error: 'No session ID found',
+                retryAfter: 1 // seconds
+            });
+        }
+
+        // Validate session ID format
+        if (!/^[a-zA-Z0-9]+$/.test(sessionId)) {
+            return res.status(400).json({
+                error: 'Invalid session ID',
+                retryAfter: 1 // seconds
+            });
         }
 
         console.log('Session ID:', sessionId);
         console.log('IP Address:', ipAddress);
 
-        // Check if user has claimed a coupon in the last hour (by session or IP)
+        // Check if user has claimed a coupon in the last hour
         const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
 
         // First, check for any claims by this session or IP in the last hour
@@ -180,8 +245,9 @@ app.post('/api/coupons/next', async (req, res) => {
         if (recentClaims.length > 0) {
             const mostRecentClaim = recentClaims[0];
             const timeLeft = Math.ceil((mostRecentClaim.claimedAt.getTime() + 3600000 - Date.now()) / 60000);
-            return res.status(400).json({
-                error: `You can only claim one coupon per hour. Please wait ${timeLeft} minutes before claiming another coupon.`
+            return res.status(429).json({
+                error: `You can only claim one coupon per hour. Please wait ${timeLeft} minutes before claiming another coupon.`,
+                retryAfter: timeLeft * 60 // seconds
             });
         }
 
@@ -211,12 +277,16 @@ app.post('/api/coupons/next', async (req, res) => {
             const newAvailableCoupons = await Coupon.find();
 
             if (newAvailableCoupons.length === 0) {
-                return res.status(404).json({ error: 'No coupons available' });
+                return res.status(404).json({
+                    error: 'No coupons available',
+                    retryAfter: 300 // 5 minutes
+                });
             }
 
-            // Get recent claims to avoid giving recently claimed coupons
+            // Get recent claims from the last 10 minutes
+            const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
             const recentClaimedCouponIds = await CouponClaim.find({
-                claimedAt: { $gt: new Date(Date.now() - 5 * 60 * 1000) } // Last 5 minutes
+                claimedAt: { $gt: tenMinutesAgo }
             }).select('couponId');
 
             const recentlyClaimedIds = recentClaimedCouponIds.map(c => c.couponId.toString());
@@ -229,7 +299,10 @@ app.post('/api/coupons/next', async (req, res) => {
             if (eligibleCoupons.length === 0) {
                 // If all coupons were recently claimed, wait a bit and try again
                 await new Promise(resolve => setTimeout(resolve, 5000));
-                return res.status(429).json({ error: 'Please try again in a few seconds' });
+                return res.status(429).json({
+                    error: 'All coupons are currently in use. Please try again in a few minutes.',
+                    retryAfter: 300 // 5 minutes
+                });
             }
 
             // Randomly select a coupon from eligible ones
@@ -254,13 +327,15 @@ app.post('/api/coupons/next', async (req, res) => {
             return res.json({
                 code: newCoupon.code,
                 description: newCoupon.description,
-                discount: newCoupon.discount
+                discount: newCoupon.discount,
+                expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours from now
             });
         }
 
-        // Get recent claims to avoid giving recently claimed coupons
+        // Get recent claims from the last 10 minutes
+        const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
         const recentClaimedCouponIds = await CouponClaim.find({
-            claimedAt: { $gt: new Date(Date.now() - 5 * 60 * 1000) } // Last 5 minutes
+            claimedAt: { $gt: tenMinutesAgo }
         }).select('couponId');
 
         const recentlyClaimedIds = recentClaimedCouponIds.map(c => c.couponId.toString());
@@ -273,7 +348,10 @@ app.post('/api/coupons/next', async (req, res) => {
         if (eligibleCoupons.length === 0) {
             // If all coupons were recently claimed, wait a bit and try again
             await new Promise(resolve => setTimeout(resolve, 5000));
-            return res.status(429).json({ error: 'Please try again in a few seconds' });
+            return res.status(429).json({
+                error: 'All coupons are currently in use. Please try again in a few minutes.',
+                retryAfter: 300 // 5 minutes
+            });
         }
 
         // Randomly select a coupon from eligible ones
@@ -299,11 +377,15 @@ app.post('/api/coupons/next', async (req, res) => {
         res.json({
             code: coupon.code,
             description: coupon.description,
-            discount: coupon.discount
+            discount: coupon.discount,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours from now
         });
     } catch (error) {
         console.error('Error claiming coupon:', error);
-        res.status(500).json({ error: 'Failed to claim coupon' });
+        res.status(500).json({
+            error: 'Failed to claim coupon',
+            retryAfter: 5 // seconds
+        });
     }
 });
 
