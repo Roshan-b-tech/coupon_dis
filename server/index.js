@@ -68,15 +68,68 @@ async function seedCoupons() {
   try {
     const count = await Coupon.countDocuments();
     if (count === 0) {
+      console.log('No coupons found, seeding initial coupons');
       const coupons = [
-        { code: 'SAVE10', description: 'Save 10% on your purchase', discount: 10 },
-        { code: 'SAVE15', description: 'Save 15% on your purchase', discount: 15 },
-        { code: 'SAVE20', description: 'Save 20% on your purchase', discount: 20 },
-        { code: 'SAVE25', description: 'Save 25% on your purchase', discount: 25 },
-        { code: 'SAVE30', description: 'Save 30% on your purchase', discount: 30 },
+        {
+          code: 'SAVE10',
+          description: 'Save 10% on your purchase',
+          discount: 10,
+          stripeId: 'SAVE10_' + Date.now(),
+          expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 90 days from now
+          duration: 'once',
+          maxRedemptions: 100,
+          timesRedeemed: 0,
+          active: true
+        },
+        {
+          code: 'SAVE15',
+          description: 'Save 15% on your purchase',
+          discount: 15,
+          stripeId: 'SAVE15_' + Date.now(),
+          expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+          duration: 'once',
+          maxRedemptions: 100,
+          timesRedeemed: 0,
+          active: true
+        },
+        {
+          code: 'SAVE20',
+          description: 'Save 20% on your purchase',
+          discount: 20,
+          stripeId: 'SAVE20_' + Date.now(),
+          expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+          duration: 'once',
+          maxRedemptions: 100,
+          timesRedeemed: 0,
+          active: true
+        },
+        {
+          code: 'SAVE25',
+          description: 'Save 25% on your purchase',
+          discount: 25,
+          stripeId: 'SAVE25_' + Date.now(),
+          expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+          duration: 'once',
+          maxRedemptions: 100,
+          timesRedeemed: 0,
+          active: true
+        },
+        {
+          code: 'SAVE30',
+          description: 'Save 30% on your purchase',
+          discount: 30,
+          stripeId: 'SAVE30_' + Date.now(),
+          expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+          duration: 'once',
+          maxRedemptions: 100,
+          timesRedeemed: 0,
+          active: true
+        },
       ];
       await Coupon.insertMany(coupons);
       console.log('Initial coupons seeded successfully');
+    } else {
+      console.log(`Found ${count} existing coupons`);
     }
   } catch (error) {
     console.error('Error seeding coupons:', error);
@@ -137,8 +190,13 @@ app.get('/api/coupons/status', async (req, res) => {
 
 app.post('/api/coupons/next', async (req, res) => {
   try {
+    console.log('Received coupon claim request');
+    console.log('Request headers:', req.headers);
+    console.log('Request cookies:', req.cookies);
+
     const sessionId = req.cookies.sessionId;
     if (!sessionId) {
+      console.log('No session ID found in cookies');
       return res.status(400).json({ error: 'No session ID found' });
     }
 
@@ -146,14 +204,19 @@ app.post('/api/coupons/next', async (req, res) => {
 
     // Check if user has claimed a coupon in the last hour
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    console.log('Checking for recent claims before:', oneHourAgo);
+
     const recentClaim = await CouponClaim.findOne({
       sessionId: sessionId,
       claimedAt: { $gt: oneHourAgo }
     });
 
     if (recentClaim) {
+      console.log('Found recent claim:', recentClaim);
       return res.status(400).json({ error: 'You can only claim one coupon per hour' });
     }
+
+    console.log('No recent claims found, searching for available coupon');
 
     // Find an unclaimed coupon
     const coupon = await Coupon.findOne({
@@ -161,25 +224,32 @@ app.post('/api/coupons/next', async (req, res) => {
       expiresAt: { $gt: new Date() },
       $or: [
         { maxRedemptions: null },
-        { timesRedeemed: { $lt: maxRedemptions } }
+        { $expr: { $lt: ['$timesRedeemed', '$maxRedemptions'] } }
       ]
     });
 
     if (!coupon) {
+      console.log('No available coupons found');
       return res.status(404).json({ error: 'No coupons available' });
     }
 
+    console.log('Found available coupon:', coupon);
+
     // Create a claim record
+    console.log('Creating claim record');
     const claim = await CouponClaim.create({
       sessionId: sessionId,
       ipAddress: req.ip,
       couponId: coupon._id,
       claimedAt: new Date()
     });
+    console.log('Claim record created:', claim);
 
     // Increment the coupon's redemption count
+    console.log('Incrementing coupon redemption count');
     coupon.timesRedeemed += 1;
     await coupon.save();
+    console.log('Coupon updated successfully');
 
     res.json({
       code: coupon.code,
@@ -191,6 +261,12 @@ app.post('/api/coupons/next', async (req, res) => {
     });
   } catch (error) {
     console.error('Error claiming coupon:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      code: error.code
+    });
     res.status(500).json({ error: 'Failed to claim coupon' });
   }
 });
