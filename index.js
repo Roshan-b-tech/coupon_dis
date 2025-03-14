@@ -40,9 +40,18 @@ const connectToMongoDB = async () => {
             throw new Error('MONGODB_URI is not defined in environment variables');
         }
 
-        await mongoose.connect(process.env.MONGODB_URI);
+        await mongoose.connect(process.env.MONGODB_URI, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+            serverSelectionTimeoutMS: 5000
+        });
+
+        // Test the connection
+        await mongoose.connection.db.admin().ping();
+
         isConnected = true;
         console.log('Successfully connected to MongoDB');
+        console.log('MongoDB connection state:', mongoose.connection.readyState);
 
         // Log the number of available coupons
         const couponCount = await Coupon.countDocuments();
@@ -50,10 +59,15 @@ const connectToMongoDB = async () => {
 
         // Seed coupons if none exist
         if (couponCount === 0) {
+            console.log('No coupons found, initiating seed process...');
             await seedCoupons();
         }
     } catch (error) {
-        console.error('MongoDB connection error:', error);
+        console.error('MongoDB connection error:', {
+            message: error.message,
+            stack: error.stack,
+            name: error.name
+        });
         isConnected = false;
         setTimeout(connectToMongoDB, 5000);
     }
@@ -237,7 +251,14 @@ app.post('/api/coupons/next', async (req, res) => {
         const sessionId = req.cookies.sessionId;
         const ipAddress = req.ip || req.connection.remoteAddress;
 
+        console.log('Attempting to claim coupon with:', {
+            sessionId,
+            ipAddress,
+            timestamp: new Date().toISOString()
+        });
+
         if (!sessionId) {
+            console.log('No session ID found in request');
             return res.status(400).json({
                 error: 'No session ID found',
                 retryAfter: 1
@@ -254,8 +275,11 @@ app.post('/api/coupons/next', async (req, res) => {
             claimedAt: { $gt: oneHourAgo }
         }).sort({ claimedAt: -1 });
 
+        console.log('Recent claims found:', recentClaims.length);
+
         if (recentClaims.length > 0) {
             const timeLeft = Math.ceil((recentClaims[0].claimedAt.getTime() + 3600000 - Date.now()) / 60000);
+            console.log('User has recent claim, time left:', timeLeft, 'minutes');
             return res.status(429).json({
                 error: `You can only claim one coupon per hour. Please wait ${timeLeft} minutes before claiming another coupon.`,
                 retryAfter: timeLeft * 60
@@ -264,46 +288,59 @@ app.post('/api/coupons/next', async (req, res) => {
 
         // Get available coupon
         const coupon = await Coupon.findOne();
+        console.log('Found existing coupon:', coupon ? 'yes' : 'no');
+
         if (!coupon) {
-            // Create a new Stripe coupon if none exists
-            const stripeCoupon = await stripe.coupons.create({
-                duration: 'repeating',
-                duration_in_months: 3,
-                percent_off: 25.5,
-                id: `SAVE25_${Date.now()}`
-            });
+            console.log('No existing coupon found, creating new Stripe coupon');
+            try {
+                // Create a new Stripe coupon if none exists
+                const stripeCoupon = await stripe.coupons.create({
+                    duration: 'repeating',
+                    duration_in_months: 3,
+                    percent_off: 25.5,
+                    id: `SAVE25_${Date.now()}`
+                });
+                console.log('Stripe coupon created successfully:', stripeCoupon.id);
 
-            const newCoupon = new Coupon({
-                code: stripeCoupon.id,
-                description: 'Save 25.5% on your purchase',
-                discount: 25.5,
-                stripeId: stripeCoupon.id
-            });
-            await newCoupon.save();
+                const newCoupon = new Coupon({
+                    code: stripeCoupon.id,
+                    description: 'Save 25.5% on your purchase',
+                    discount: 25.5,
+                    stripeId: stripeCoupon.id
+                });
+                await newCoupon.save();
+                console.log('New coupon saved to database:', newCoupon._id);
 
-            // Create claim record
-            await CouponClaim.create({
-                sessionId,
-                ipAddress,
-                couponId: newCoupon._id,
-                claimedAt: new Date()
-            });
+                // Create claim record
+                const claim = await CouponClaim.create({
+                    sessionId,
+                    ipAddress,
+                    couponId: newCoupon._id,
+                    claimedAt: new Date()
+                });
+                console.log('Claim record created:', claim._id);
 
-            return res.json({
-                code: newCoupon.code,
-                description: newCoupon.description,
-                discount: newCoupon.discount,
-                expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) // 3 months
-            });
+                return res.json({
+                    code: newCoupon.code,
+                    description: newCoupon.description,
+                    discount: newCoupon.discount,
+                    expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) // 3 months
+                });
+            } catch (stripeError) {
+                console.error('Stripe coupon creation error:', stripeError);
+                throw stripeError;
+            }
         }
 
+        console.log('Creating claim for existing coupon:', coupon._id);
         // Create claim record for existing coupon
-        await CouponClaim.create({
+        const claim = await CouponClaim.create({
             sessionId,
             ipAddress,
             couponId: coupon._id,
             claimedAt: new Date()
         });
+        console.log('Claim record created:', claim._id);
 
         res.json({
             code: coupon.code,
@@ -312,9 +349,13 @@ app.post('/api/coupons/next', async (req, res) => {
             expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) // 3 months
         });
     } catch (error) {
-        console.error('Error claiming coupon:', error);
+        console.error('Error claiming coupon:', {
+            error: error.message,
+            stack: error.stack,
+            name: error.name
+        });
         res.status(500).json({
-            error: 'Failed to claim coupon',
+            error: 'Failed to claim coupon: ' + error.message,
             retryAfter: 5
         });
     }
