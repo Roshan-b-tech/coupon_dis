@@ -43,14 +43,12 @@ const connectToMongoDB = async () => {
             throw new Error('MONGODB_URI is not defined in environment variables');
         }
 
-        // Updated connection options
+        // Updated connection options with longer timeouts
         await mongoose.connect(process.env.MONGODB_URI, {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-            serverSelectionTimeoutMS: 30000, // Increased from 5000 to 30000
-            socketTimeoutMS: 45000, // Added socket timeout
-            connectTimeoutMS: 30000, // Added connect timeout
-            heartbeatFrequencyMS: 10000, // Added heartbeat frequency
+            serverSelectionTimeoutMS: 60000, // Increased to 60 seconds
+            socketTimeoutMS: 60000, // Increased to 60 seconds
+            connectTimeoutMS: 60000, // Increased to 60 seconds
+            heartbeatFrequencyMS: 10000,
             retryWrites: true,
             w: 'majority'
         });
@@ -62,14 +60,18 @@ const connectToMongoDB = async () => {
         console.log('Successfully connected to MongoDB');
         console.log('MongoDB connection state:', mongoose.connection.readyState);
 
-        // Log the number of available coupons
-        const couponCount = await Coupon.countDocuments();
-        console.log(`Number of coupons in database: ${couponCount}`);
+        // Use findOne instead of countDocuments to check for coupons
+        try {
+            const existingCoupon = await Coupon.findOne().lean();
+            console.log(`Coupons in database: ${existingCoupon ? 'Yes' : 'No'}`);
 
-        // Seed coupons if none exist
-        if (couponCount === 0) {
-            console.log('No coupons found, initiating seed process...');
-            await seedCoupons();
+            // Seed coupons if none exist
+            if (!existingCoupon) {
+                console.log('No coupons found, initiating seed process...');
+                await seedCoupons();
+            }
+        } catch (findError) {
+            console.error('Error checking for coupons:', findError);
         }
     } catch (error) {
         console.error('MongoDB connection error:', {
@@ -88,6 +90,11 @@ app.use(cors({
         const allowedOrigins = [
             'https://freecoupon60min.netlify.app',
             'http://localhost:5173',
+            'http://localhost:5174',
+            'http://localhost:3000',
+            'http://127.0.0.1:5173',
+            'http://127.0.0.1:5174',
+            'http://127.0.0.1:3000',
             'https://coupon-dis.onrender.com',
             process.env.CLIENT_URL
         ].filter(Boolean);
@@ -154,6 +161,11 @@ app.use('/api/coupons/status', statusLimiter);
 
 // Add security headers middleware
 app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-XSS-Protection', '1; mode=block');
@@ -165,13 +177,15 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
     if (!req.cookies.sessionId && req.path !== '/api/coupons/status') {
         const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
-        res.cookie('sessionId', sessionId, {
+        const isLocalhost = req.headers.origin?.includes('localhost');
+        const cookieOptions = {
             maxAge: 86400000, // 24 hours
             httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
+            secure: !isLocalhost, // Only require secure in production
+            sameSite: isLocalhost ? 'lax' : 'none',
             path: '/'
-        });
+        };
+        res.cookie('sessionId', sessionId, cookieOptions);
         req.cookies.sessionId = sessionId;
         console.log('New session cookie set:', sessionId);
     } else {
@@ -257,6 +271,9 @@ app.get('/api/coupons/status', async (req, res) => {
 
 // Add a test endpoint to check coupon response
 app.get('/api/test-coupon', async (req, res) => {
+    // Set content type to JSON
+    res.setHeader('Content-Type', 'application/json');
+
     try {
         // Find a coupon
         const coupon = await Coupon.findOne().lean();
@@ -286,6 +303,44 @@ app.get('/api/test-coupon', async (req, res) => {
         return res.json(response);
     } catch (error) {
         console.error('Test endpoint error:', error);
+        return res.status(500).json({ error: 'Test endpoint error' });
+    }
+});
+
+// Add a new test endpoint specifically for our test
+app.get('/api/test-coupon-json', async (req, res) => {
+    // Set content type to JSON
+    res.setHeader('Content-Type', 'application/json');
+
+    try {
+        // Find a coupon
+        const coupon = await Coupon.findOne().lean();
+
+        if (!coupon) {
+            return res.status(404).json({ error: 'No coupons found' });
+        }
+
+        console.log('Test JSON endpoint - Found coupon:', JSON.stringify(coupon));
+
+        // Create a simple response with all fields
+        const response = {
+            id: coupon._id.toString(),
+            code: coupon.code,
+            description: coupon.description,
+            discount: coupon.discount,
+            expiresAt: coupon.expiresAt,
+            duration: coupon.duration,
+            duration_in_months: coupon.duration_in_months,
+            maxRedemptions: coupon.maxRedemptions,
+            timesRedeemed: coupon.timesRedeemed,
+            active: coupon.active
+        };
+
+        console.log('Test JSON endpoint - Sending response:', JSON.stringify(response));
+
+        return res.json(response);
+    } catch (error) {
+        console.error('Test JSON endpoint error:', error);
         return res.status(500).json({ error: 'Test endpoint error' });
     }
 });
@@ -560,8 +615,10 @@ startServer().catch(console.error);
 // Modify the seedCoupons function to create Stripe coupons
 async function seedCoupons() {
     try {
-        const count = await Coupon.countDocuments();
-        if (count === 0) {
+        // Use findOne() instead of countDocuments() to avoid timeout
+        const existingCoupon = await Coupon.findOne().lean();
+
+        if (!existingCoupon) {
             // Create a Stripe coupon
             let stripeCoupon;
             let useLocalFallback = false;
@@ -596,6 +653,8 @@ async function seedCoupons() {
             });
             await coupon.save();
             console.log('Initial coupon created successfully:', useLocalFallback ? '(local fallback)' : '(Stripe)');
+        } else {
+            console.log('Existing coupon found, skipping seed process');
         }
     } catch (error) {
         console.error('Error seeding coupons:', error);

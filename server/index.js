@@ -146,8 +146,8 @@ app.post('/api/coupons/next', async (req, res) => {
 
     // Check if user has claimed a coupon in the last hour
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    const recentClaim = await Coupon.findOne({
-      claimedBy: sessionId,
+    const recentClaim = await CouponClaim.findOne({
+      sessionId: sessionId,
       claimedAt: { $gt: oneHourAgo }
     });
 
@@ -156,17 +156,39 @@ app.post('/api/coupons/next', async (req, res) => {
     }
 
     // Find an unclaimed coupon
-    const coupon = await Coupon.findOne({ claimedBy: null });
+    const coupon = await Coupon.findOne({
+      active: true,
+      expiresAt: { $gt: new Date() },
+      $or: [
+        { maxRedemptions: null },
+        { timesRedeemed: { $lt: maxRedemptions } }
+      ]
+    });
+
     if (!coupon) {
       return res.status(404).json({ error: 'No coupons available' });
     }
 
-    // Update the coupon with the user's session ID
-    coupon.claimedBy = sessionId;
-    coupon.claimedAt = new Date();
+    // Create a claim record
+    const claim = await CouponClaim.create({
+      sessionId: sessionId,
+      ipAddress: req.ip,
+      couponId: coupon._id,
+      claimedAt: new Date()
+    });
+
+    // Increment the coupon's redemption count
+    coupon.timesRedeemed += 1;
     await coupon.save();
 
-    res.json({ code: coupon.code });
+    res.json({
+      code: coupon.code,
+      description: coupon.description,
+      discount: coupon.discount,
+      expiresAt: coupon.expiresAt,
+      duration: coupon.duration,
+      duration_in_months: coupon.duration_in_months
+    });
   } catch (error) {
     console.error('Error claiming coupon:', error);
     res.status(500).json({ error: 'Failed to claim coupon' });

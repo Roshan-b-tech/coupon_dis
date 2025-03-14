@@ -48,6 +48,15 @@ const couponSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  claimedBy: {
+    type: String,
+    default: null,
+    index: true
+  },
+  claimedAt: {
+    type: Date,
+    default: null
+  },
   active: {
     type: Boolean,
     default: true,

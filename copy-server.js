@@ -1,3 +1,4 @@
+
 import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -32,15 +33,19 @@ async function copyServerFiles() {
 
         // Ensure dist directory exists
         const distDir = join(__dirname, 'dist');
-        const serverModelsDir = join(distDir, 'server', 'models');
+        const serverDir = join(distDir, 'server');
+        const serverModelsDir = join(serverDir, 'models');
 
         await ensureDirectoryExists(distDir);
+        await ensureDirectoryExists(serverDir);
         await ensureDirectoryExists(serverModelsDir);
 
-        // Define files to copy (only index.js and Coupon.js)
+        // Define files to copy (include all necessary server files)
         const filesToCopy = [
             { src: 'index.js', dest: 'dist/index.js' },
-            { src: 'server/models/Coupon.js', dest: 'dist/server/models/Coupon.js' }
+            { src: 'server/models/Coupon.js', dest: 'dist/server/models/Coupon.js' },
+            { src: 'server/models/CouponClaim.js', dest: 'dist/server/models/CouponClaim.js' },
+            { src: '.env', dest: 'dist/.env' }
         ];
 
         // Copy all files

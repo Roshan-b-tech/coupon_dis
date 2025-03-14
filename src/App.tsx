@@ -4,8 +4,11 @@ import { Toaster, toast } from 'react-hot-toast';
 
 // Define API URL based on environment
 const API_URL = import.meta.env.VITE_API_URL || 'https://coupon-dis.onrender.com';
+const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
 console.log('Current API URL:', API_URL);
 console.log('Environment:', import.meta.env.MODE);
+console.log('Is localhost:', isLocalhost);
 console.log('All environment variables:', import.meta.env);
 
 interface Coupon {
@@ -33,7 +36,10 @@ function App() {
     // Set session ID cookie if not exists
     if (!document.cookie.includes('sessionId')) {
       const sessionId = Math.random().toString(36).substring(2);
-      document.cookie = `sessionId=${sessionId}; max-age=86400; path=/; SameSite=None; Secure`;
+      const cookieOptions = isLocalhost
+        ? `max-age=86400; path=/; SameSite=Lax`
+        : `max-age=86400; path=/; SameSite=None; Secure`;
+      document.cookie = `sessionId=${sessionId}; ${cookieOptions}`;
       console.log('Set sessionId cookie:', sessionId);
     } else {
       console.log('Existing sessionId cookie found');
@@ -89,8 +95,10 @@ function App() {
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        }
+          'Accept': 'application/json',
+          'Origin': window.location.origin
+        },
+        mode: 'cors'
       });
 
       console.log('Response status:', response.status);
