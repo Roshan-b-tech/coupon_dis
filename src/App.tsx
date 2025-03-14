@@ -20,7 +20,7 @@ function App() {
     // Set session ID cookie if not exists
     if (!document.cookie.includes('sessionId')) {
       const sessionId = Math.random().toString(36).substring(2);
-      document.cookie = `sessionId=${sessionId}; max-age=86400; path=/`;
+      document.cookie = `sessionId=${sessionId}; max-age=86400; path=/; SameSite=None; Secure`;
     }
   }, []);
 
@@ -29,11 +29,23 @@ function App() {
       setLoading(true);
       setError(null);
 
+      console.log('Attempting to fetch from:', `${API_URL}/api/coupons/next`);
+
       const response = await fetch(`${API_URL}/api/coupons/next`, {
+        method: 'GET',
         credentials: 'include',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        mode: 'cors',
+        cache: 'no-cache'
       });
 
+      console.log('Response status:', response.status);
+
       const data = await response.json();
+      console.log('Response data:', data);
 
       if (!response.ok) {
         throw new Error(data.message || 'Failed to claim coupon');
@@ -42,6 +54,7 @@ function App() {
       setCoupon(data);
       toast.success('Coupon claimed successfully!');
     } catch (err) {
+      console.error('Error details:', err);
       setError(err instanceof Error ? err.message : 'An error occurred');
       toast.error(err instanceof Error ? err.message : 'An error occurred');
     } finally {
