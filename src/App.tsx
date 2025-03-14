@@ -44,7 +44,8 @@ function App() {
           'Content-Type': 'application/json',
         },
         mode: 'cors',
-        cache: 'no-cache'
+        cache: 'no-cache',
+        referrerPolicy: 'no-referrer'
       });
 
       console.log('Response status:', response.status);
