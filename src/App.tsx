@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Gift, AlertCircle } from 'lucide-react';
 import { Toaster, toast } from 'react-hot-toast';
 
+// Define API URL based on environment
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+
 interface Coupon {
   code: string;
   description: string;
@@ -26,7 +29,7 @@ function App() {
       setLoading(true);
       setError(null);
 
-      const response = await fetch('http://localhost:5000/api/coupons/next', {
+      const response = await fetch(`${API_URL}/api/coupons/next`, {
         credentials: 'include',
       });
 
